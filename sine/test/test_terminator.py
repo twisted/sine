@@ -1,5 +1,5 @@
-from sign.test.test_sip import FakeClockTestCase, TestRealm, PermissiveChecker
-from sign import sip
+from sine.test.test_sip import FakeClockTestCase, TestRealm, PermissiveChecker
+from sine import sip
 from twisted import cred
 from twisted.internet import reactor
 

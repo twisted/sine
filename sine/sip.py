@@ -1600,7 +1600,6 @@ class ITransactionUser(Interface):
         """Processes a response received from the transport, along
         with the client transaction it is a part of, if any."""
 
-
     def clientTransactionTerminated(ct):
         """Called when a client transaction created by this TU
         transitions to the 'terminated' state."""
@@ -2123,18 +2122,59 @@ class Registrar:
 
 
 
-
-class Originator:
-
+class Dialog:
+    def __init__(self, callid, localtag, remotetag):
+        self.callid = callid
+        self.localtag = localtag
+        self.remotetag = remotetag
+        
+class UserAgentServer:
+    def __init__(self, adddress, dialogs=None):
+        self.address = address
+        if dialogs is not None:
+            self.dialogs = dialogs
+        else:
+            self.dialogs = {}
     def start(self, transport):
         self.transport = transport
 
-    def originate(self, fromURL, toURL):
-        # Call fromURL, wait for pickup, then call toURL and connect
-        # them (reinvite?)
-        pass
+    def requestReceived(self, msg, addr):
+        st = ServerTransaction(self.transport, self, msg, addr)
+        #dialog checking
+        dialogID = (msg.headers['call-id'][0],
+                    parseAddress(msg.headers['to'][0])[2].get('tag',''),
+                    parseAddress(msg.headers['from'][0])[2].get('tag',''))
+        dialog = self.dialogs.get(dialogID, None)
+        if dialog is not None:
+            #mid-request!
+            pass
+        else:
+            #untagged requests must be checked against ongoing transactions
+            # see 8.2.2.2
+            
 
-class Terminator:
+            if dialogID[1]:
+                #uh oh, there was an expectation of a dialog
+                #but we can't remember it (maybe we crashed?)
+                st.messageReceivedFromTU(responseFromRequest(481, msg))
+                return st
 
-    def start(self, transport):
-        self.transport = transport
+            #authentication
+            #check for Require
+
+            m = self.getattr("received_" + msg.method, None)
+            if not m:
+                st.messageReceivedFromTU(responseFromRequest(405, msg))
+                return st                
+            else:
+                return m(st, msg, addr)        
+
+
+
+class SimpleCallAcceptor(UserAgentServer):
+
+    def process_INVITE(self, st, msg, addr):
+        #do something with SDP
+        st.messageReceivedFromTU(responseFromRequest(405, msg))
+        return st
+    

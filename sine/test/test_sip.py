@@ -4,7 +4,7 @@
 from zope.interface import  implements
 
 from twisted.trial import unittest
-from xmantissa import  sip
+from sine import  sip
 from twisted.internet import defer, reactor
 
 
@@ -185,7 +185,7 @@ class TestRealm:
         try:
             return sip.IContact, self.users[avatarId], lambda: None
         except KeyError:
-
+            import pdb; pdb.set_trace()
             raise NoSuchUser
 
 class MessageParsingTestCase(unittest.TestCase):
@@ -515,7 +515,7 @@ class ProxyTestCase(FakeClockTestCase):
         self.sip.datagramReceived(exampleInvite, (testurls["client.com"], 5060))
         self.assertEquals(len(self.sent), 2)
         m, dest = self.sent[1]
-        
+
         self.assertEquals(dest[1], 5060)
         self.assertEquals(dest[0], testurls["proxy2.org"])
         self.assertEquals(m.uri.toString(), "sip:bob@proxy2.org")
@@ -523,7 +523,7 @@ class ProxyTestCase(FakeClockTestCase):
         self.assertEquals(m.headers["via"],
                           ['SIP/2.0/UDP proxy1.org:5060;branch=z9hG4bK1456f8e2565d83971ccb7104399f879b;rport',
                            'SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9;received=10.0.0.1'])
-        
+
     def testReceivedRequestForward(self):
         self.sip.datagramReceived(exampleInvite, ("1.1.1.1", 5060))
         m, dest = self.sent[1]
@@ -559,7 +559,7 @@ class ProxyTestCase(FakeClockTestCase):
         self.sip.datagramReceived(exampleInvite, (testurls["client.com"], 5060))
         self.assertEquals(len(self.sent), 2)
         self.assertEquals(self.sent[0][0].code, 100)
-        m, dest = self.sent[1]        
+        m, dest = self.sent[1]
         self.assertEquals(m.code, 604)
         self.assertEquals(dest, (testurls["client.com"], 5060))
         self.assertEquals(m.headers["via"], ['SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9;received=10.0.0.1'])
@@ -582,13 +582,13 @@ class RegistrationTestCase(FakeClockTestCase):
         def sm(msg, dest):
             self.sent.append((dest, msg))
         self.transport.sendMessage = sm
-        
+
 
 
 
     def tearDown(self):
         self.clock.advance(33)
-        
+
     def testWontForwardRequest(self):
         r = sip.Request("INVITE", "sip:joe@server.com")
         r.addHeader("via", sip.Via("1.2.3.4", branch="z9hG4bKA").toString())
@@ -750,7 +750,7 @@ class Client:
 
     def sendMessage(self, msg, *etc):
         pass
-    
+
 class LiveTest(FakeClockTestCase):
 
     def setUp(self):
@@ -769,7 +769,7 @@ class LiveTest(FakeClockTestCase):
                                             interface="127.0.0.1")
         self.serverPortNo = self.serverPort.getHost().port
         self.transport.port = self.serverPortNo
-        self.clientTransport.port = self.clientPort.getHost().port        
+        self.clientTransport.port = self.clientPort.getHost().port
 
     def tearDown(self):
         self.clock.advance(181)
@@ -1347,16 +1347,16 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
 
         class FakeDatagramTransport1:
             def __init__(self):
-                self.written = []                            
+                self.written = []
             def write(ft, packet, addr=None):
                 ft.written.append(packet)
                 if addr[0] != "10.0.0.1":
                     reactor.callLater(0, self.sip2.datagramReceived,
                                       packet, ("10.1.0.1", 5060))
-                
+
         class FakeDatagramTransport2:
             def __init__(self):
-                self.written = []                            
+                self.written = []
             def write(ft, packet, addr=None):
                 ft.written.append(packet)
                 if addr[0] == "10.1.0.1":
@@ -1364,15 +1364,15 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
                                       packet, ("10.1.0.2", 5060))
                 elif addr[0] != "10.0.0.2":
                     raise unittest.FailTest("Proxy 2 sent to a wrong host")
-                
+
         ft1 = FakeDatagramTransport1()
-        ft2 = FakeDatagramTransport2()        
+        ft2 = FakeDatagramTransport2()
         self.proxy1SendQueue = ft1.written
         self.proxy2SendQueue = ft2.written
         self.sip1.transport = ft1
         self.sip2.transport = ft2
-        
-        
+
+
         self.proxy1._lookupURI = self.proxy2._lookupURI = lambda uri: defer.succeed([(testurls.get(uri.host, uri.host), 5060)])
 
     def assertMsgEqual(self, first, second):
@@ -1382,7 +1382,7 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
         self.parser.dataReceived(second)
         self.parser.dataDone()
         self.assertEqual(self.testMessages[0],  self.testMessages[1])
-        
+
     def invite(self):
         self.sip1.datagramReceived(aliceInvite, ('10.0.0.1', 5060)) # F4
         reactor.iterate()
@@ -1460,14 +1460,14 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
 
         self.clock.advance(33)
         reactor.iterate()
-        
+
         self.assertEquals(len(self.sip1.serverTransactions), 0)
         self.assertEquals(len(self.sip2.serverTransactions), 0)
         self.assertEquals(len(self.sip1.clientTransactions), 0)
         self.assertEquals(len(self.sip2.serverTransactions), 0)
         self.assertEquals(len(self.proxy1.responseContexts), 0)
         self.assertEquals(len(self.proxy2.responseContexts), 0)
-        
+
     def testCancelAfter180(self):
         #Section 3.8
         self.inviteAnd180()
@@ -1527,5 +1527,3 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
         reactor.iterate()
         reactor.iterate()
         self.resetq()
-
-

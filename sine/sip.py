@@ -426,7 +426,7 @@ def parseAddress(address, host=None, port=None, clean=0):
     except:
         log.err()
         raise SIPError(400)
-    
+
 class Message:
     """A SIP message."""
 
@@ -450,7 +450,7 @@ class Message:
                 and self.version == other.version
                 and dict([(k,v) for k,v in self.headers.items() if v]) == dict([(k,v) for k,v in other.headers.items() if v])
                 and self.body == other.body)
-    
+
     def addHeader(self, name, value):
         name = name.lower()
         name = longHeaders.get(name, name)
@@ -880,7 +880,7 @@ def computeBranch(msg):
                                     parseAddress(msg.headers['from'][0])[2].get('tag','')+
                                    msg.headers['call-id'][0] +
                                    msg.uri.toString() +
-                                   oldvia +  
+                                   oldvia +
                                    msg.headers['cseq'][0].split(' ')[0])
                                   ).hexdigest()
 
@@ -893,7 +893,7 @@ class IContact(Interface):
         @return: Deferred of C{Registration} or failure with RegistrationError.
         """
 
-    def unregisterAddress():
+    def unregisterAddress(physicalURL):
         """Unregister the physical address of a logical URL.
 
         @return: Deferred of C{Registration} or failure with RegistrationError.
@@ -918,7 +918,7 @@ class IContact(Interface):
         """Record an outgoing call.
         """
 
-
+#Timer values defined in Section 30 of RFC 3261.
 T1 = 0.5
 T2 = 4
 T4 = 5
@@ -927,7 +927,7 @@ class ClientInviteTransaction(object):
     __metaclass__ = ModalType
     initialMode = 'calling'
     modeAttribute = 'mode'
-    
+
     def __init__(self, transport, tu, invite, peerURL):
         self.transport = transport
         self.tu = tu
@@ -938,7 +938,7 @@ class ClientInviteTransaction(object):
         self.branch = computeBranch(invite)
         self.transport.clientTransactions[self.branch] = self
         self.start()
-        
+
     def transitionTo(self, stateName):
         self.end()
         self.mode = stateName
@@ -950,9 +950,9 @@ class ClientInviteTransaction(object):
     def transportError(self, err):
         self.tu.transportError(self, err)
         self.transitionTo('terminated')
-        
 
-    def ack(self, msg):        
+
+    def ack(self, msg):
         "Builds an ACK according to the rules in 17.1.1.3, RFC3261."
         ack = Request('ACK',self.request.uri)
         for name in ("from", "call-id", 'route'):
@@ -978,7 +978,7 @@ class ClientInviteTransaction(object):
                                     branch=self.branch).toString())
         self.transport.sendRequest(cancel, self.peer)
 
-    
+
     class calling(mode):
 
         def start(self):
@@ -991,7 +991,7 @@ class ClientInviteTransaction(object):
                 self.timerA = reactor.callLater(self.timerATries*T1,
                                                 timerARetry)
             timerARetry()
-            
+
             self.timerB = reactor.callLater(64*T1, self.timeout)
 
         def messageReceived(self, msg):
@@ -1024,7 +1024,7 @@ class ClientInviteTransaction(object):
 
         def cancel(self):
             self.waitingToCancel = True
-            
+
     class proceeding(mode):
         def start(self):
             debug("ClientInvite %s transitioning to 'proceeding'" % (self.peer,))
@@ -1057,7 +1057,7 @@ class ClientInviteTransaction(object):
             else:
                 self.response = responseFromRequest(408, self.request)
             self.transitionTo('terminated')
-            
+
     class completed(mode):
 
         def start(self):
@@ -1067,7 +1067,7 @@ class ClientInviteTransaction(object):
 
         def messageReceived(self, msg):
             if 300 <= msg.code:
-                self.ack(msg)                
+                self.ack(msg)
 
         def end(self):
             if self.timerD.active():
@@ -1086,16 +1086,16 @@ class ClientInviteTransaction(object):
                     del self.transport.clientTransactions[k]
                     break
             self.tu.clientTransactionTerminated(self)
-            
+
         def messageReceived(self, msg):
             pass
 
         def end(self):
             raise RuntimeError, "can't unterminate a transaction"
-        
+
         def cancel(self):
             pass
-        
+
 
 
 class ClientTransaction(object):
@@ -1111,7 +1111,7 @@ class ClientTransaction(object):
         branch = computeBranch(request)
         self.transport.clientTransactions[branch] = self
         self.start()
-        
+
     def transitionTo(self, stateName):
         self.end()
         self.mode = stateName
@@ -1129,14 +1129,14 @@ class ClientTransaction(object):
         def start(self):
             debug("Client %s transitioning to 'trying'" % (self.peer,))
             self.timerETries = 0
-            def timerERetry():                
+            def timerERetry():
                 self.timerETries += 1
                 self.sendRequest()
                 self.timerE = reactor.callLater(min((2**self.timerETries)*T1, T2),
                                   timerERetry)
             timerERetry()
             self.timerF = reactor.callLater(64*T1, self.transitionTo, 'terminated')
-        
+
         def messageReceived(self, msg):
             if 200 <= msg.code:
                 self.response = msg
@@ -1145,37 +1145,37 @@ class ClientTransaction(object):
                 self.transitionTo('proceeding')
             self.tu.responseReceived(msg, self)
 
-        
+
         def end(self):
             if self.timerE.active():
                 self.timerE.cancel()
             if self.timerF.active():
                 self.timerF.cancel()
-            
+
     class proceeding(mode):
 
         def start(self):
             debug("Client %s transitioning to 'proceeding'" % (self.peer,))
             self.timerETries = 0
-            def timerERetry():                
+            def timerERetry():
                 self.timerETries += 1
                 self.sendRequest()
                 reactor.callLater(T2, timerERetry)
             timerERetry()
             self.timerF = reactor.callLater(64*T1, self.transitionTo, 'terminated')
-            
-        def messageReceived(self, msg):                            
+
+        def messageReceived(self, msg):
             if 200 <= msg.code:
                 self.transitionTo('completed')
                 self.response = msg
             self.tu.responseReceived(msg, self)
-            
+
         def end(self):
             if self.timerE.active():
                 self.timerE.cancel()
             if self.timerF.active():
                 self.timerF.cancel()
-            
+
     class completed(mode):
 
         def start(self):
@@ -1192,7 +1192,7 @@ class ClientTransaction(object):
         def end(self):
             if self.timerK.active():
                 self.timerK.cancel()
-                
+
 
     class terminated(mode):
         def start(self):
@@ -1214,7 +1214,7 @@ class ServerInviteTransaction(object):
     __metaclass__ = ModalType
     initialMode = 'proceeding'
     modeAttribute = 'mode'
-    
+
     def __init__(self, transport, tu, message, peerURL):
         self.message = message
         self.tu = tu
@@ -1224,7 +1224,7 @@ class ServerInviteTransaction(object):
 
     def sentFinalResponse(self):
         return self.lastResponse.code >= 200
-    
+
     def transitionTo(self, stateName):
         self.end()
         self.mode = stateName
@@ -1247,18 +1247,18 @@ class ServerInviteTransaction(object):
 
         def end(self):
             pass
-        
+
         def messageReceived(self, msg):
             if msg.method == "INVITE":
                 self.repeatLastResponse()
-                
+
         def messageReceivedFromTU(self, msg):
             self.respond(msg)
             if 200 <= msg.code < 300:
                 self.transitionTo('terminated')
             elif 300 <= msg.code < 700:
                 self.transitionTo('completed')
-    
+
 
     class completed(mode):
 
@@ -1294,7 +1294,7 @@ class ServerInviteTransaction(object):
     class confirmed(mode):
 
         def start(self):
-            debug("ServerInvite %s transitioning to 'confirmed'" % (self.peer,)) 
+            debug("ServerInvite %s transitioning to 'confirmed'" % (self.peer,))
             self.timerI = reactor.callLater(T4, self.transitionTo,
                                             'terminated')
 
@@ -1306,14 +1306,14 @@ class ServerInviteTransaction(object):
 
         def end(self):
             pass
-        
+
 
     class terminated(mode):
 
         def start(self):
             debug("ServerInvite %s transitioning to 'terminated'" % (self.peer,))
             self.transport.serverTransactionTerminated(self)
-        
+
         def messageReceived(self, msg):
             pass
 
@@ -1322,7 +1322,7 @@ class ServerInviteTransaction(object):
 
         def end(self):
             pass
-        
+
 
 
 class ServerTransaction(object):
@@ -1365,7 +1365,7 @@ class ServerTransaction(object):
                 self.transitionTo('completed')
 
         def end(self):
-            pass        
+            pass
 
     class proceeding(mode):
 
@@ -1374,15 +1374,15 @@ class ServerTransaction(object):
 
         def messageReceived(self, msg):
             self.repeatLastResponse()
-            
+
         def messageReceivedFromTU(self, msg):
             self.respond(msg)
-            if 200 <= msg.code < 700:                
-                self.transitionTo('completed')    
+            if 200 <= msg.code < 700:
+                self.transitionTo('completed')
 
 
         def end(self):
-            pass        
+            pass
 
     class completed(mode):
 
@@ -1407,7 +1407,7 @@ class ServerTransaction(object):
         def start(self):
             debug("Server %s transitioning to 'terminated'" % (self.peer,))
             self.transport.serverTransactionTerminated(self)
-        
+
         def messageReceived(self, msg):
             pass
 
@@ -1416,10 +1416,10 @@ class ServerTransaction(object):
 
         def end(self):
             pass
-        
 
-    
-    
+
+
+
 ###############################################################################
 
 class SIPTransport(protocol.DatagramProtocol):
@@ -1432,9 +1432,9 @@ class SIPTransport(protocol.DatagramProtocol):
            hosts: A sequence of hostnames this element is
                   authoritative for. The first is used as the name for
                   outgoing messages. If empty, socket.getfqdn() is
-                  used instead.                  
+                  used instead.
            port: The port this element listens on."""
-        
+
         self.messages = []
         self.parser = MessagesParser(self.addMessage)
         self.tu = tu
@@ -1444,7 +1444,7 @@ class SIPTransport(protocol.DatagramProtocol):
         self.serverTransactions = {}
         self.clientTransactions = {}
         tu.start(self)
-        
+
     def addMessage(self, msg):
         self.messages.append(msg)
 
@@ -1473,7 +1473,7 @@ class SIPTransport(protocol.DatagramProtocol):
                 raise
             else:
                 self._badRequest(addr, e)
-            
+
     def _badRequest(self, addr, e):
         #request parsing failed, we're going to have to make stuff up
 
@@ -1499,7 +1499,7 @@ class SIPTransport(protocol.DatagramProtocol):
     def handle_request(self, msg, addr):
         #RFC 3261 17.2.3
         via = parseViaHeader(msg.headers['via'][0])
-        
+
         if not (via.branch and via.branch.startswith(VIA_COOKIE)):
             via.branch = computeBranch(msg)
         method = msg.method
@@ -1516,7 +1516,7 @@ class SIPTransport(protocol.DatagramProtocol):
                                              via.port, msg.method)] = st
             return defer.maybeDeferred(self.tu.requestReceived, msg, addr
                                        ).addCallback(addNewServerTransaction)
-    
+
 
     def serverTransactionTerminated(self, st):
         #Brutal, but simple
@@ -1532,28 +1532,28 @@ class SIPTransport(protocol.DatagramProtocol):
         if not (via.host in self.hosts and via.port == self.port):
             #drop silently
             return
-        
+
         #RFC 3261 17.1.3
-        ct = self.clientTransactions.get(via.branch)        
+        ct = self.clientTransactions.get(via.branch)
         if ct and msg.headers['cseq'][0].split(' ')[1] == ct.request.headers['cseq'][0].split(' ')[1]:
             ct.messageReceived(msg)
         else:
             self.tu.responseReceived(msg)
 
-    
+
     def sendRequest(self, msg, target):
         """Add a Via header to this message and send it to the (host,
         port) target."""
-        
+
         #CANCEL & ACK requires the same Via branch as the thing it is
-        #cancelling/acking so it has to be added by the txn            
+        #cancelling/acking so it has to be added by the txn
         if msg.method not in ("ACK", "CANCEL"):
             #raaaaa this is so we don't add the same via header on resends
             msg = msg.copy()
             if msg.headers.get('via'):
                 msg.headers['via'] = msg.headers['via'][:]
             #RFC 3261 18.1.1
-            #RFC 3581 3            
+            #RFC 3581 3
             msg.headers.setdefault('via', []).insert(0, Via(self.host, self.port,
                                             rport=True,
                                             branch=computeBranch(msg)).toString())
@@ -1563,17 +1563,17 @@ class SIPTransport(protocol.DatagramProtocol):
         debug("Sending %r to %r" % (msg.method, target))
         self._resolveA(target[0]).addCallback(
             lambda ip: self.sendMessage(msg, (ip, (target[1] or self.PORT))))
-        
-    
+
+
     def sendResponse(self, msg):
         """Determine the target for the response and send it."""
-        
+
         #RFC 3261 18.2.2
         #RFC 3581 4
         via = parseViaHeader(msg.headers['via'][0])
         host = via.received or via.host
         port = via.rport or via.port or self.PORT
-        
+
         debug("Sending %r to %r" % (msg.code, (host, port)))
         self._resolveA(host).addCallback(
             lambda ip: self.sendMessage(msg, (ip, port)))
@@ -1604,22 +1604,22 @@ class ITransactionUser(Interface):
     def clientTransactionTerminated(ct):
         """Called when a client transaction created by this TU
         transitions to the 'terminated' state."""
-        
+
 #from resiprocate's proxy
-responsePriorities = {                  428: 24, 429: 24, 494: 24, 
-    412: 1,                             413: 25, 414: 25, 
-    484: 2,                             421: 26, 
-    422: 3, 423: 3,                     486: 30, 
-    407: 4, 401: 4,                     480: 31, 
-    402: 6,                             410: 32,                       
-    493: 10,                            436: 33, 437: 33, 
-    420: 12,                            403: 32, 
-    406: 13, 415: 13, 488: 13,          404: 35, 
-    416: 20, 417: 20,                   487: 36, 
-    405: 21, 501: 21,                   503: 40, 
-    580: 22,                            483: 41, 482: 41, 
-    485: 23,                            408: 49} 
-                                        
+responsePriorities = {                  428: 24, 429: 24, 494: 24,
+    412: 1,                             413: 25, 414: 25,
+    484: 2,                             421: 26,
+    422: 3, 423: 3,                     486: 30,
+    407: 4, 401: 4,                     480: 31,
+    402: 6,                             410: 32,
+    493: 10,                            436: 33, 437: 33,
+    420: 12,                            403: 32,
+    406: 13, 415: 13, 488: 13,          404: 35,
+    416: 20, 417: 20,                   487: 36,
+    405: 21, 501: 21,                   503: 40,
+    580: 22,                            483: 41, 482: 41,
+    485: 23,                            408: 49}
+
 
 class Proxy:
     implements(ITransactionUser)
@@ -1641,7 +1641,7 @@ class Proxy:
         #RFC 3261 16.4
         if msg.uri == self.recordroute:
             msg.uri = msg.headers['route'].pop()
-            
+
         if msg.headers.get('route',None):
             route = parseAddress(msg.headers['route'][0])[1]
             if (route.host in self.transport.hosts and
@@ -1649,7 +1649,7 @@ class Proxy:
                 del msg.headers['route'][0]
 
         #RFC 3261 16.5
-        if msg.uri.host in self.transport.hosts: 
+        if msg.uri.host in self.transport.hosts:
             if msg.method == 'REGISTER':
                 return self.registrar.requestReceived(msg, addr)
             elif msg.method == 'OPTIONS' and msg.uri.username is None:
@@ -1657,11 +1657,11 @@ class Proxy:
                 st.messageReceivedFromTU(responseFromRequest(200, msg))
                 return st
 
-                
+
         def _cb(x, st):
             return self.findTargets(msg.uri).addCallback(
                 self.forwardRequest, msg, st)
-            
+
         def _eb(err):
             if err.check(SIPError):
                 errcode = err.value.code
@@ -1673,8 +1673,8 @@ class Proxy:
                 log.err(err)
             st.messageReceivedFromTU(
                 responseFromRequest(errcode, msg))
-            
-        if msg.method == 'INVITE':            
+
+        if msg.method == 'INVITE':
             st = ServerInviteTransaction(self.transport, self, msg, addr)
             st.messageReceivedFromTU(responseFromRequest(100, msg))
             return self.checkInviteAuthorization(msg).addCallback(
@@ -1690,7 +1690,7 @@ class Proxy:
                     self.cancelPendingClients(t)
                     break
             else:
-                self.proxyRequestStatelessly(msg)        
+                self.proxyRequestStatelessly(msg)
                 return None
         elif msg.method == 'ACK':
             msg.headers['via'].insert(0,Via(self.transport.host, self.transport.port,
@@ -1701,25 +1701,26 @@ class Proxy:
         else:
             st = ServerTransaction(self.transport, self, msg, addr)
             _cb(None, st)
-            
+
             if msg.method == 'BYE':
                 self.untrackSession(msg)
             return st
-        
-    def proxyRequestStatelessly(self, originalMsg):        
+
+    def proxyRequestStatelessly(self, originalMsg):
         def _cb(addrs):
             msg, addr = self.processRouting(originalMsg, addrs[0])
             self.transport.sendRequest(msg, (addr.host, addr.port))
         self.findTargets(originalMsg.uri).addCallback(_cb)
 
     def findTargets(self, addr):
+        import pdb;  pdb.set_trace()
         d = self.portal.login(Preauthenticated(addr.toCredString()),
                               None, IContact)
 
         def lookedUpSuccessful((ifac, contact, logout)):
             return defer.maybeDeferred(contact.getRegistrationInfo
                                        ).addCallback(
-                lambda x: [i[0] for i in x])        
+                lambda x: [i[0] for i in x])
         def failedLookup(err):
             e = err.trap(NoSuchUser, UnauthorizedLogin)
             if e == UnauthorizedLogin:
@@ -1727,14 +1728,14 @@ class Proxy:
             elif e == NoSuchUser:
                 raise SIPLookupError(604)
         return d.addCallback(lookedUpSuccessful).addErrback(failedLookup)
-        
+
     def forwardRequest(self, targets, originalMsg, st):
         fs = []
         if len(targets) == 0:
             raise SIPLookupError(480)
         for addr in targets:
             msg, addr = self.processRouting(originalMsg, addr)
-            
+
             fs.append(self._lookupURI(addr).addCallback(self._forward,msg, st))
         return defer.DeferredList(fs)
 
@@ -1742,7 +1743,7 @@ class Proxy:
         #16.6
         msg = originalMsg.copy()
         msg.uri = addr
-        if msg.headers.get('max-forwards'):                
+        if msg.headers.get('max-forwards'):
             msg.headers['max-forwards'][0] = str(int(
                 msg.headers['max-forwards'][0]) - 1)
         else:
@@ -1757,7 +1758,7 @@ class Proxy:
             else:
                 addr = parseAddress(msg.headers['route'][0])[1]
         return msg, addr
-    
+
     def _forward(self, addresses, msg, st):
         for address in addresses:
             #16.6.8
@@ -1796,12 +1797,12 @@ class Proxy:
         else:
             #just do an A lookup
             return [(userURI.host, 5060)]
-    
+
     def checkInviteAuthorization(self, message):
         name, uri, tags = parseAddress(message.headers["to"][0], clean=1)
         fromname, fromuri, ignoredTags = parseAddress(message.headers["from"][0], clean=1)
         somebodyWasAuthorized = []
-        def recordIt(oururi, theiruri, method, *extra):            
+        def recordIt(oururi, theiruri, method, *extra):
             #XXX XXX totally need to check to see if the invite is
             #from a registered address
             d = self.portal.login(Preauthenticated('%s@%s' % (oururi.username, oururi.host)), None, IContact)
@@ -1874,7 +1875,7 @@ class Proxy:
                 del self.responseContexts[ct]
 
 
-            
+
     def chooseFinalResponse(self, st):
         cts = self.responseContexts[st]
         noResponses = True
@@ -1883,7 +1884,7 @@ class Proxy:
             if code is not None and code >= 200:
                 noResponses = False
                 break
-        assert not noResponses, "BROKEN. chooseFinalResponse was called before any final responses occurred." 
+        assert not noResponses, "BROKEN. chooseFinalResponse was called before any final responses occurred."
 
         prioritizedResponses = []
         for code, ct in responses:
@@ -1909,7 +1910,7 @@ class Proxy:
             finalResponse.code = 300
 
         elif finalResponse.code in (401, 407):
-            #RFC 3261 16.7.7                
+            #RFC 3261 16.7.7
             authHeaders = {}
             for code, ct in responses:
                 if code == 401:
@@ -1924,21 +1925,21 @@ class Proxy:
         return finalResponse
 
 
-            
+
     def responseReceived(self, msg, ct=None):
         #RFC 3261 16.7
         if msg.code == 100:
             return
         via = msg.headers['via'][0]
         msg.headers['via'] = msg.headers['via'][1:]
-        
+
         if len(msg.headers['via']) == 0:
             if not msg.headers['cseq'][0].endswith('CANCEL'):
                 #ignore CANCEL/200s, process the rest
                 self.processLocalResponse(msg, ct)
             return
         if (not ct and msg.headers['cseq'][0].endswith('INVITE')
-            and 200 <= msg.code < 300): 
+            and 200 <= msg.code < 300):
             self.transport.sendResponse(msg)
             return
         else:
@@ -1952,7 +1953,7 @@ class Proxy:
                 timerC.reset(181)
             st.messageReceivedFromTU(msg)
             return
-        
+
         #TODO: Catch 3xx responses, add their redirects to the target set
         if 200 <= msg.code < 300:
             self.finalResponses[st] = msg
@@ -1960,17 +1961,17 @@ class Proxy:
             if isinstance(ct, ClientInviteTransaction):
                 self.trackSession(msg)
         elif 600 <= msg.code:
-            self.cancelPendingClients(st)            
+            self.cancelPendingClients(st)
         else:
             #might as well leave the message there, sans our via header
             ct.response = msg
-        
+
         st.messageReceivedFromTU(msg)
-        
+
     def processLocalResponse(self, msg, ct):
         if getattr(self.originator, None):
             self.originator.responseReceived(msg, ct)
-                    
+
     def cancelPendingClients(self, st):
         if isinstance(st, ServerInviteTransaction):
             cts = self.responseContexts.get(st, [])
@@ -1983,7 +1984,7 @@ class Proxy:
     def untrackSession(self, msg):
         pass
 
-    
+
 class Registrar:
     authorizers = {
         'digest': DigestAuthorizer(),
@@ -1993,7 +1994,7 @@ class Registrar:
 
     def start(self, transport):
         self.transport = transport
-        
+
     def getRegistrationInfo(self, url):
         #XXX Need to think about impact of all these cred lookups in a
         #cluster environment
@@ -2001,14 +2002,14 @@ class Registrar:
             return a.getRegistrationInfo()
         def _ebRegInfo(failure):
             failure.trap(UnauthorizedLogin)
-            return None        
+            return None
         return self.portal.login(Preauthenticated('%s@%s' % (url.username,
                                                             url.host)),
                                  None, IContact).addCallback(
             _cbRegInfo).addErrback(
             _ebRegInfo)
 
-    
+
     def requestReceived(self, msg, addr):
         st = ServerTransaction(self.transport, self, msg, addr)
         if msg.method == "REGISTER":
@@ -2016,7 +2017,7 @@ class Registrar:
         else:
             st.messageReceivedFromTU(responseFromRequest(501, msg))
         return st
-            
+
     def registrate(self, message, addr):
         name, toURL, params = parseAddress(message.headers["to"][0], clean=1)
         if not message.headers.has_key("authorization"):
@@ -2025,9 +2026,9 @@ class Registrar:
             parts = message.headers['authorization'][0].split(None, 1)
             a = self.authorizers.get(parts[0].lower())
             if a:
-                creds = a.decode(parts[1])                
+                creds = a.decode(parts[1])
                 # IGNORE the authorization username - take that, SIP
-                # configuration UIs!!!                
+                # configuration UIs!!!
                 creds.username = toURL.toCredString()
 
         return self.portal.login(creds, None, IContact
@@ -2043,9 +2044,9 @@ class Registrar:
 
     def register(self, avatar, message, addr):
         def _cbRegister(regdata, message):
-            response = responseFromRequest(200, message)            
+            response = responseFromRequest(200, message)
             #for old times' sake I will send a separate Expires header
-            #if there is only one contact            
+            #if there is only one contact
             if len(regdata) == 1:
                 contactURL, expiry = regdata[0]
                 response.addHeader("contact", contactURL.toString())
@@ -2120,7 +2121,7 @@ class Registrar:
             m.headers.setdefault('www-authenticate', []).append(value)
         return m
 
-    
+
 
 
 class Originator:
@@ -2128,7 +2129,7 @@ class Originator:
     def start(self, transport):
         self.transport = transport
 
-    def originate(self, fromURL, toURL):        
+    def originate(self, fromURL, toURL):
         # Call fromURL, wait for pickup, then call toURL and connect
         # them (reinvite?)
         pass
@@ -2137,4 +2138,3 @@ class Terminator:
 
     def start(self, transport):
         self.transport = transport
-

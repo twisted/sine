@@ -3,7 +3,7 @@
 # Copyright (C) 2004 Jamey Hicks
 #
 
-from shtoom.rtp.formats import RTPDict, PTMarker
+from xshtoom.rtp.formats import RTPDict, PTMarker
 from twisted.python.util import OrderedDict
 
 class BadAnnounceError(Exception):

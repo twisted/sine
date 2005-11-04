@@ -2,7 +2,7 @@
 "This module contains the logic and classes for format negotiation"
 
 from twisted.python.util import OrderedDict
-from shtoom.avail import codecs
+from xshtoom.avail import codecs
 
 
 class PTMarker:
@@ -95,7 +95,7 @@ class SDPGenerator:
     "Responsible for generating SDP for the RTPProtocol"
 
     def getSDP(self, rtp, extrartp=None):
-        from shtoom.sdp import SDP, MediaDescription
+        from xshtoom.sdp import SDP, MediaDescription
         if extrartp:
             raise ValueError("can't handle multiple RTP streams in a call yet")
         s = SDP()

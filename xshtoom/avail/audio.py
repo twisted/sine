@@ -3,7 +3,7 @@
 # This file will eventually contain all of the horrors of import magic
 # for audio interfaces
 
-from shtoom.avail import _removeImport
+from xshtoom.avail import _removeImport
 
 try:
     import ossaudiodev
@@ -12,7 +12,7 @@ except ImportError:
     _removeImport('ossaudiodev')
 
 if ossaudiodev is not None:
-    from shtoom.audio import ossaudio
+    from xshtoom.audio import ossaudio
     del ossaudiodev
 else:
     ossaudio = None
@@ -26,7 +26,7 @@ except ImportError:
 
 if fastaudio is not None:
     del fastaudio
-    from shtoom.audio import fast as fastaudio
+    from xshtoom.audio import fast as fastaudio
 
 
 try:
@@ -36,12 +36,12 @@ except ImportError:
     _removeImport('coreaudio')
 
 if coreaudio is not None:
-    from shtoom.audio import osxaudio
+    from xshtoom.audio import osxaudio
     del coreaudio
 else:
     osxaudio = None
 
-from shtoom.audio import fileaudio
+from xshtoom.audio import fileaudio
 
 try:
     import alsaaudio
@@ -50,9 +50,9 @@ except ImportError:
     _removeImport('alsaaudio')
 
 if alsaaudio is not None:
-    from shtoom.audio import alsa as alsaaudio
+    from xshtoom.audio import alsa as alsaaudio
 
-from shtoom.audio import fileaudio, echoaudio
+from xshtoom.audio import fileaudio, echoaudio
 
 
 def listAudio():

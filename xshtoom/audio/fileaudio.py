@@ -1,7 +1,7 @@
 # Copyright (C) 2005 Anthony Baxter
 
 from twisted.python import log
-from shtoom.audio import baseaudio
+from xshtoom.audio import baseaudio
 from twisted.internet.task import LoopingCall
 
 # XXX TOFIX: use the audio pref to specify infile,outfile and kill two options
@@ -62,7 +62,7 @@ class AudioFromFiles(baseaudio.AudioDevice):
         self.LC = None
 
     def openDev(self):
-        from shtoom.util import stack
+        from xshtoom.util import stack
         self._getFiles()
         #print "openDev called!", self._closed, self.LC, stack()
         if self.LC is not None:

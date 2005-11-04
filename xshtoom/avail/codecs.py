@@ -4,7 +4,7 @@
 # for codecs
 
 
-from shtoom.avail import _removeImport
+from xshtoom.avail import _removeImport
 
 try:
     import gsm

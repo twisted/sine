@@ -10,15 +10,15 @@ from twisted.internet import reactor, defer
 from twisted.internet.protocol import DatagramProtocol
 from twisted.python import log
 
-from shtoom.rtp.formats import SDPGenerator, PT_CN, PT_xCN, PT_NTE, PT_PCMU
-from shtoom.rtp.packets import RTPPacket, parse_rtppacket
-from shtoom.audio.converters import MediaSample
+from xshtoom.rtp.formats import SDPGenerator, PT_CN, PT_xCN, PT_NTE, PT_PCMU
+from xshtoom.rtp.packets import RTPPacket, parse_rtppacket
+from xshtoom.audio.converters import MediaSample
 
 TWO_TO_THE_16TH = 2L<<16
 TWO_TO_THE_32ND = 2L<<32
 TWO_TO_THE_48TH = 2L<<48
 
-from shtoom.rtp.packets import NTE
+from xshtoom.rtp.packets import NTE
 
 class RTPProtocol(DatagramProtocol):
     """Implementation of the RTP protocol.
@@ -86,7 +86,7 @@ class RTPProtocol(DatagramProtocol):
 
     def _socketCreationAttempt(self, locIP=None):
         from twisted.internet.error import CannotListenError
-        from shtoom.rtp import rtcp
+        from xshtoom.rtp import rtcp
         self.RTCP = rtcp.RTCPProtocol()
 
         # RTP port must be even, RTCP must be odd
@@ -95,7 +95,8 @@ class RTPProtocol(DatagramProtocol):
         # Note that it's kinda pointless when we're behind a NAT that
         # rewrites ports. We can at least send RTCP out in that case,
         # but there's no way we'll get any back.
-        rtpPort = self.app.getPref('force_rtp_port')
+        #rtpPort = self.app.getPref('force_rtp_port')
+        rtpPort = None
         if not rtpPort:
             rtpPort = 11000 + random.randint(0, 9000)
         if (rtpPort % 2) == 1:
@@ -149,13 +150,13 @@ class RTPProtocol(DatagramProtocol):
         # See above comment about port translation.
         # We have to do STUN for both RTP and RTCP, and hope we get a sane
         # answer.
-        from shtoom.nat import getMapper
+        from xshtoom.nat import getMapper
         d = getMapper()
         d.addCallback(self._cb_gotMapper)
         return d
 
     def unmapRTP(self):
-        from shtoom.nat import getMapper
+        from xshtoom.nat import getMapper
         if self.needSTUN is False:
             return defer.succeed(None)
         # Currently removing an already-fired trigger doesn't hurt,
@@ -240,7 +241,9 @@ class RTPProtocol(DatagramProtocol):
 
     def stopSendingAndReceiving(self):
         self.Done = 1
-        d = self.unmapRTP()
+        #XXXSHTOOM
+        #d = self.unmapRTP()
+        d = defer.succeed(None)
         d.addCallback(lambda x: self.rtpListener.stopListening())
         d.addCallback(lambda x: self.rtcpListener.stopListening())
 

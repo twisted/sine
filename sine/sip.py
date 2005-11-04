@@ -22,7 +22,8 @@ from axiom.errors import NoSuchUser
 
 from epsilon.modal import mode, ModalType
 
-from shtoom.sdp import SDP
+from xshtoom.sdp import SDP
+from xshtoom.rtp.protocol import RTPProtocol
 
 debuggingEnabled=0
 
@@ -2141,7 +2142,7 @@ class Registrar:
 
 
 class Dialog:
-    def __init__(self, contactURI, msg, direction=None):
+    def __init__(self, tu, contactURI, msg, direction=None):
         self.msg = msg
         self.contactURI = contactURI
         self.callID = msg.headers['call-id'][0]
@@ -2159,7 +2160,8 @@ class Dialog:
         self.localAddress[2]['tag'] = self.genTag()
         self.localCSeq = random.randint(1E11,1E12)
         self.direction = direction
-
+        self.rtp = RTPProtocol(tu, self)
+        
     def getDialogID(self):
         return (self.callID, self.localAddress[2].get('tag',''),
                 self.remoteAddress[2].get('tag',''))
@@ -2191,8 +2193,8 @@ class Dialog:
         return response
 
 class UserAgentServer:
-    def __init__(self, address, dialogs=None):
-        self.address = address
+    def __init__(self, localHost, dialogs=None):
+        self.localHost = localHost
         if dialogs is not None:
             self.dialogs = dialogs
         else:
@@ -2206,22 +2208,15 @@ class UserAgentServer:
         #dialog checking
 
         dialog = self.matchDialog(msg)
-        if dialog is not None:
-            #mid-request!
-            #something special needs to happen with INVITEs here
-            if msg.method == "INVITE":
-                print "Target refresh requests are unimplemented"
-                raise SIPError(501)
-        else:
-            #untagged requests must be checked against ongoing transactions
-            # see 8.2.2.2
+        #untagged requests must be checked against ongoing transactions
+        # see 8.2.2.2
 
 
-            if parseAddress(msg.headers['to'][0])[2].get('tag',None):
-                #uh oh, there was an expectation of a dialog
-                #but we can't remember it (maybe we crashed?)
-                st.messageReceivedFromTU(responseFromRequest(481, msg))
-                return st
+        if not dialog and parseAddress(msg.headers['to'][0])[2].get('tag',None):
+            #uh oh, there was an expectation of a dialog
+            #but we can't remember it (maybe we crashed?)
+            st.messageReceivedFromTU(responseFromRequest(481, msg))
+            return st
 
             #authentication
             #check for Require
@@ -2231,18 +2226,17 @@ class UserAgentServer:
             st.messageReceivedFromTU(responseFromRequest(405, msg))
             return st
         else:
-            return m(st, msg, addr)
+            return m(st, msg, addr, dialog)
 
 
 
 class SimpleCallAcceptor(UserAgentServer):
-    def __init__(self, rtp, address, dialogs=None):
-        UserAgentServer.__init__(self, address, dialogs)
-        self.rtp = rtp
+    def __init__(self, localHost, dialogs=None):
+        UserAgentServer.__init__(self, localHost, dialogs)
         self.calls = []
         self.ackTimers = {}
         #XXX wrong
-        self.contactURI = URL("example.com", "jethro")
+        self.contactURI = URL(localHost, "jethro")
 
     def ackTimerRetry(self, callID, msg):
         timer, tries = self.ackTimers[callID]
@@ -2259,14 +2253,22 @@ class SimpleCallAcceptor(UserAgentServer):
                                   tries+1)
 
 
-    def process_INVITE(self, st, msg, addr):
+    def process_INVITE(self, st, msg, addr, dialog):
+        if dialog:
+            #mid-request!
+            #something special needs to happen with INVITEs here
+            print "Target refresh requests are unimplemented"
+            st.messageReceivedFromTU(dialog.responseFromRequest(501, msg))
+            return st
+        #otherwise, time to start a new one
+        dialog = Dialog(self.contactURI, self.localHost, msg,
+                        direction="server")
+        d = dialog.rtp.createRTPSocket(self.localHost, False)
         sdp = SDP(msg.body)
-        mysdp = self.rtp.getSDP(sdp)
+        mysdp = dialog.rtp.getSDP(sdp)
         if not sdp.hasMediaDescriptions():
             st.messageReceivedFromTU(responseFromRequest(406, msg))
             return st
-        #hooray successful response time, create a dialog
-        dialog = Dialog(self.contactURI, msg, direction="server")
         self.dialogs[dialog.getDialogID()] = dialog
         response = dialog.responseFromRequest(200, msg, mysdp.show())
         st.messageReceivedFromTU(response)
@@ -2278,9 +2280,8 @@ class SimpleCallAcceptor(UserAgentServer):
 
         return st
 
-    def process_ACK(self, st, msg, addr):
+    def process_ACK(self, st, msg, addr, dialog):
         #woooo it is an ack for a 200, it is call setup time
-        self.calls.append(msg.headers['call-id'][0])
         timer = self.ackTimers[msg.headers['call-id'][0]][0]
         if timer.active():
             timer.cancel()
@@ -2300,15 +2301,14 @@ class SimpleCallAcceptor(UserAgentServer):
             None)
         return dialog
 
-    def process_BYE(self, st, msg, addr):
-        dialog = self.matchDialog(msg)
+    def process_BYE(self, st, msg, addr, dialog):
         if not dialog:
             raise SIPError(481)
         #stop RTP stuff
+        dialog.rtp.stopSendingAndReceiving()
         response = dialog.responseFromRequest(200, msg, None)
         st.messageReceivedFromTU(response)
         del self.dialogs[dialog.getDialogID()]
-        self.calls.remove(msg.headers['call-id'][0])
 
     def sendBye(self, callID):
         del self.ackTimers[callID]

@@ -2,13 +2,13 @@
 """
 
 from twisted.python import log
-from shtoom.audio.converters import MediaLayer
+from xshtoom.audio.converters import MediaLayer
 
 
 
 def findAudioInterface():
     # Ugh. Circular import hell
-    from shtoom.avail import audio as av_audio
+    from xshtoom.avail import audio as av_audio
     audioOptions = { 'oss': av_audio.ossaudio,
                      'alsa': av_audio.alsaaudio,
                      'fast': av_audio.fastaudio,
@@ -50,7 +50,7 @@ def findAudioInterface():
 _device = None
 
 def getAudioDevice(_testAudioInt=None):
-    from shtoom.exceptions import NoAudioDevice
+    from xshtoom.exceptions import NoAudioDevice
     global _device
     if _testAudioInt is not None:
         return MediaLayer(_testAudioInt.Device())

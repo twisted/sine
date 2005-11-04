@@ -10,7 +10,7 @@ def cleanup(*names):
             del sys.modules[name]
 
 def getTextInterface(fail=False):
-    from shtoom.ui.textshtoom import main
+    from xshtoom.ui.textshtoom import main
     return main
 
 def getQtInterface(fail=False):
@@ -23,7 +23,7 @@ def getQtInterface(fail=False):
         if fail:
             raise
     if qt is not None:
-        from shtoom.ui.qtshtoom import main
+        from xshtoom.ui.qtshtoom import main
         return main
 
 def getWxInterface(fail=False):
@@ -37,7 +37,7 @@ def getWxInterface(fail=False):
         if fail:
             raise
     if wx is not None:
-        from shtoom.ui.wxshtoom import main
+        from xshtoom.ui.wxshtoom import main
         return main
 
 
@@ -52,7 +52,7 @@ def getTkInterface(fail=False):
         if fail:
             raise
     if Tkinter is not None:
-        from shtoom.ui.tkshtoom import main
+        from xshtoom.ui.tkshtoom import main
         return main
 
 def getGnomeInterface(fail=False):
@@ -70,7 +70,7 @@ def getGnomeInterface(fail=False):
             raise
         gtk = None
     if gtk is not None:
-        from shtoom.ui.gnomeshtoom import main
+        from xshtoom.ui.gnomeshtoom import main
         return main
 
 def listUI():

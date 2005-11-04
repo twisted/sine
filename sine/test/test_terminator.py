@@ -42,14 +42,14 @@ To: Bob <sip:bob@proxy2.org>;tag=314159\r
 Call-ID: 3848276298220188511@client.com\r
 CSeq: 1 INVITE\r
 User-Agent: Divmod Sine\r
-Content-Length: 142\r
+Content-Length: 126\r
 Content-Type: application/sdp\r
-Contact: sip:bob@127.0.0.2\r
+Contact: sip:jethro@127.0.0.2\r
 \r
 v=0\r
-o=bob 69086 69086 IN IP4 sip:bob@127.0.0.2\r
+o=bob 69086 69086 IN IP4 127.0.0.2\r
 s=shtoom\r
-c=IN IP4 sip:bob@127.0.0.2\r
+c=IN IP4 127.0.0.2\r
 t=0 0\r
 m=audio 17692 RTP/AVP 0\r
 a=rtpmap:0 PCMU/8000\r
@@ -90,7 +90,6 @@ CSeq: 1 BYE\r
 Content-Length: 0\r
 \r
 """
-#XXX
 
 
 class CallTerminateTest(FakeClockTestCase):
@@ -102,7 +101,7 @@ class CallTerminateTest(FakeClockTestCase):
         #fakeRTP = RTPProtocol(None, "")
         #fakeRTP._extIP = "127.0.0.2"
         #fakeRTP._extRTPPort = 8000
-        self.uas = sip.SimpleCallAcceptor(sip.parseURL("sip:bob@127.0.0.2"))
+        self.uas = sip.SimpleCallAcceptor("127.0.0.2")
         self.sent = []
         self.sip = sip.SIPTransport(self.uas, ["server.com"], 5060)
         self.sip.sendMessage = lambda dest, msg: self.sent.append((dest, msg))

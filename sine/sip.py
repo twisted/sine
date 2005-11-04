@@ -5,7 +5,7 @@
 # telephone. My wish has come true. I no longer know how to use my
 # telephone." - Bjarne Stroustrup
 
-import socket, random, md5, sys, urllib
+import socket, random, md5, sys, urllib, wave
 
 from twisted.python import log, util
 from twisted.internet import protocol, defer, reactor, abstract
@@ -2161,7 +2161,10 @@ class Dialog:
         self.localCSeq = random.randint(1E11,1E12)
         self.direction = direction
         self.rtp = RTPProtocol(tu, self)
-        
+        #XXX move this to a friendlier place
+        self.file = wave.open('recording.wav', 'wb')
+        self.file.setparams((1,2,8000,0,'NONE','NONE'))
+
     def getDialogID(self):
         return (self.callID, self.localAddress[2].get('tag',''),
                 self.remoteAddress[2].get('tag',''))
@@ -2192,6 +2195,13 @@ class Dialog:
         response.creationFinished()
         return response
 
+    def writeAudio(self, data):
+        self.file.writeframes(data)
+
+    def end(self):
+        self.rtp.stopSendingAndReceiving()
+        #XXX refactor 
+        self.file.close()
 class UserAgentServer:
     def __init__(self, localHost, dialogs=None):
         self.localHost = localHost
@@ -2237,7 +2247,6 @@ class SimpleCallAcceptor(UserAgentServer):
         self.ackTimers = {}
         #XXX wrong
         self.contactURI = URL(localHost, "jethro")
-
     def ackTimerRetry(self, callID, msg):
         timer, tries = self.ackTimers[callID]
         if tries > 10:
@@ -2261,9 +2270,9 @@ class SimpleCallAcceptor(UserAgentServer):
             st.messageReceivedFromTU(dialog.responseFromRequest(501, msg))
             return st
         #otherwise, time to start a new one
-        dialog = Dialog(self.contactURI, self.localHost, msg,
+        dialog = Dialog(self, self.contactURI, msg,
                         direction="server")
-        d = dialog.rtp.createRTPSocket(self.localHost, False)
+        d = dialog.rtp.createRTPSocket(self.contactURI.host, False)
         sdp = SDP(msg.body)
         mysdp = dialog.rtp.getSDP(sdp)
         if not sdp.hasMediaDescriptions():
@@ -2305,13 +2314,29 @@ class SimpleCallAcceptor(UserAgentServer):
         if not dialog:
             raise SIPError(481)
         #stop RTP stuff
-        dialog.rtp.stopSendingAndReceiving()
+        dialog.end()
         response = dialog.responseFromRequest(200, msg, None)
         st.messageReceivedFromTU(response)
-        del self.dialogs[dialog.getDialogID()]
 
+        del self.dialogs[dialog.getDialogID()]
+        
     def sendBye(self, callID):
         del self.ackTimers[callID]
         del self.calls[callID]
         ## actually send a BYE, etc. that's a UAC problem really, i'll
         ## deal with that later
+
+    def incomingRTP(self, dialog, packet):
+        from xshtoom.rtp.formats import PT_NTE
+        if packet.header.ct is PT_NTE:
+            data = packet.data
+            key = ord(data[0])
+            start = (ord(data[1]) & 128) and True or False
+            if start:
+                print "start inbound dtmf", key
+                self.receivedDTMF(dialog, key)
+            else:
+                print "stop inbound dtmf", key
+            return
+        else:
+            dialog.writeAudio(packet.data)

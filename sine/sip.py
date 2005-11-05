@@ -24,7 +24,7 @@ from epsilon.modal import mode, ModalType
 
 from xshtoom.sdp import SDP
 from xshtoom.rtp.protocol import RTPProtocol
-
+from xshtoom.audio.converters import Codecker, PT_PCMU
 debuggingEnabled=0
 
 def debug(txt):
@@ -2162,6 +2162,7 @@ class Dialog:
         self.direction = direction
         self.rtp = RTPProtocol(tu, self)
         #XXX move this to a friendlier place
+        self.codec = Codecker(PT_PCMU)
         self.file = wave.open('recording.wav', 'wb')
         self.file.setparams((1,2,8000,0,'NONE','NONE'))
 
@@ -2195,8 +2196,8 @@ class Dialog:
         response.creationFinished()
         return response
 
-    def writeAudio(self, data):
-        self.file.writeframes(data)
+    def writeAudio(self, packet):
+        self.file.writeframes(self.codec.decode(packet))
 
     def end(self):
         self.rtp.stopSendingAndReceiving()
@@ -2230,7 +2231,6 @@ class UserAgentServer:
 
             #authentication
             #check for Require
-
         m = getattr(self, "process_" + msg.method, None)
         if not m:
             st.messageReceivedFromTU(responseFromRequest(405, msg))
@@ -2322,7 +2322,6 @@ class SimpleCallAcceptor(UserAgentServer):
         
     def sendBye(self, callID):
         del self.ackTimers[callID]
-        del self.calls[callID]
         ## actually send a BYE, etc. that's a UAC problem really, i'll
         ## deal with that later
 
@@ -2333,10 +2332,13 @@ class SimpleCallAcceptor(UserAgentServer):
             key = ord(data[0])
             start = (ord(data[1]) & 128) and True or False
             if start:
-                print "start inbound dtmf", key
+                #print "start inbound dtmf", key
                 self.receivedDTMF(dialog, key)
             else:
-                print "stop inbound dtmf", key
-            return
+                #print "stop inbound dtmf", key
+                return
         else:
-            dialog.writeAudio(packet.data)
+            dialog.writeAudio(packet)
+
+    def receivedDTMF(self, dialog, key):
+        print "SOMEBODY PUSHED ", key, "!!"

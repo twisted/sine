@@ -1,6 +1,5 @@
 from sine.test.test_sip import FakeClockTestCase, TestRealm, PermissiveChecker
-from sine import sip
-from xshtoom.rtp.protocol import RTPProtocol
+from sine import sip, useragent
 from twisted import cred
 from twisted.internet import reactor
 from twisted.trial import unittest
@@ -101,7 +100,7 @@ class CallTerminateTest(FakeClockTestCase):
         #fakeRTP = RTPProtocol(None, "")
         #fakeRTP._extIP = "127.0.0.2"
         #fakeRTP._extRTPPort = 8000
-        self.uas = sip.SimpleCallAcceptor("127.0.0.2")
+        self.uas = useragent.SimpleCallAcceptor("127.0.0.2")
         self.sent = []
         self.sip = sip.SIPTransport(self.uas, ["server.com"], 5060)
         self.sip.sendMessage = lambda dest, msg: self.sent.append((dest, msg))
@@ -109,7 +108,7 @@ class CallTerminateTest(FakeClockTestCase):
         self.parser = sip.MessagesParser(self.testMessages.append)
 
         #XXX this is probably not good
-        sip.Dialog.genTag = lambda self: "314159"
+        useragent.Dialog.genTag = lambda self: "314159"
 
     def tearDown(self):
         self.clock.advance(33)

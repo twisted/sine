@@ -66,6 +66,19 @@ class Dialog:
     def writeAudio(self, packet):
         self.file.writeframes(self.codec.decode(packet))
 
+    def playFile(self, f):
+        def playSample():
+            data = f.read(320)
+            if data == '':
+                self.LC.stop()
+                del self.LC
+            else:
+                sample = self.codec.handle_audio(data)
+                self.rtp.handle_media_sample(sample)
+
+        self.LC = LoopingCall(playSample)
+        self.LC.start(0.020)
+
     def end(self):
         self.rtp.stopSendingAndReceiving()
         #XXX refactor
@@ -217,19 +230,7 @@ class SimpleCallAcceptor:
         #XXX total hack for expediency
         import os
         f = open(os.path.join(os.path.split(__file__)[0], 'test_audio.raw'))
-        #dialog.codec.handle_audio(f.read())
-        def playSample():
-            data = f.read(320)
-            if data == '':
-                dialog.LC.stop()
-            else:
-                sample = dialog.codec.handle_audio(data)
-                dialog.rtp.handle_media_sample(sample)
-
-
-        dialog.LC = LoopingCall(playSample)
-        dialog.LC.start(0.020)
-
+        dialog.playFile(f)
 
     def dropCall(self, *args, **kwargs):
         "For shtoom compatibility."

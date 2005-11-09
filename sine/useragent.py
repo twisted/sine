@@ -1,9 +1,12 @@
 from xshtoom.sdp import SDP
 from xshtoom.rtp.protocol import RTPProtocol
-from xshtoom.audio.converters import Codecker, PT_PCMU
+from xshtoom.audio.converters import Codecker, PT_PCMU, PT_GSM
 from sine.sip import responseFromRequest, parseAddress, formatAddress, Response, URL, T1, T2, SIPError, ServerTransaction
 from twisted.internet import reactor
+from twisted.internet.task import LoopingCall
 import random, wave
+
+
 class Dialog:
     def __init__(self, tu, contactURI, msg, direction=None):
         self.msg = msg
@@ -25,8 +28,8 @@ class Dialog:
         self.direction = direction
         self.rtp = RTPProtocol(tu, self)
         #XXX move this to a friendlier place
-        self.codec = Codecker(PT_PCMU)
-        self.codec.handler = self.rtp.handle_media_sample
+        self.codec = Codecker(PT_GSM)
+        #self.codec.handler = self.rtp.handle_media_sample
         self.file = wave.open('recording.wav', 'wb')
         self.file.setparams((1,2,8000,0,'NONE','NONE'))
 
@@ -65,7 +68,7 @@ class Dialog:
 
     def end(self):
         self.rtp.stopSendingAndReceiving()
-        #XXX refactor 
+        #XXX refactor
         self.file.close()
 
 
@@ -74,15 +77,14 @@ class SimpleCallAcceptor:
     # XXX Most of this needs to live in a UserAgentServer class, and
     # all the hard wired file recording/playback stuff would stay
     # here.
-    
+
     def __init__(self, localHost, dialogs=None):
         self.localHost = localHost
         if dialogs is not None:
             self.dialogs = dialogs
         else:
             self.dialogs = {}
-        self.calls = []
-        self.ackTimers = {}
+
         #XXX wrong
         self.contactURI = URL(localHost, "jethro")
 
@@ -115,18 +117,18 @@ class SimpleCallAcceptor:
 
 
 
-    def ackTimerRetry(self, callID, msg):
-        timer, tries = self.ackTimers[callID]
+    def ackTimerRetry(self, dialog,  msg):
+        timer, tries = dialog.ackTimer
         if tries > 10:
             #more than 64**T1 seconds since we've heard from the other end
             #so say bye and give up
-            self.sendBye(callID)
+            self.sendBye(dialog)
             return
         if tries > 0:
             self.transport.sendResponse(msg)
-        self.ackTimers[callID] = (reactor.callLater(min((2**tries)*T1, T2),
+        dialog.ackTimer = (reactor.callLater(min((2**tries)*T1, T2),
                                                     self.ackTimerRetry,
-                                                    callID, msg),
+                                                    dialog, msg),
                                   tries+1)
 
 
@@ -142,7 +144,7 @@ class SimpleCallAcceptor:
                         direction="server")
         d = dialog.rtp.createRTPSocket(self.contactURI.host, False)
         sdp = SDP(msg.body)
-        mysdp = dialog.rtp.getSDP(sdp)        
+        mysdp = dialog.rtp.getSDP(sdp)
         if not sdp.hasMediaDescriptions():
             st.messageReceivedFromTU(responseFromRequest(406, msg))
             return st
@@ -154,21 +156,18 @@ class SimpleCallAcceptor:
         response = dialog.responseFromRequest(200, msg, mysdp.show())
         st.messageReceivedFromTU(response)
 
-        #XXX callid is probably wrong, needs to be dialog related?
-        callID = msg.headers['call-id'][0]
-        self.ackTimers[callID] = [None, 0]
-        self.ackTimerRetry(callID, response)
+        dialog.ackTimer = [None, 0]
+        self.ackTimerRetry(dialog, response)
 
         return st
 
     def process_ACK(self, st, msg, addr, dialog):
         #woooo it is an ack for a 200, it is call setup time
-        timer = self.ackTimers[msg.headers['call-id'][0]][0]
+        timer = dialog.ackTimer[0]
         if timer.active():
             timer.cancel()
-            del self.ackTimers[msg.headers['call-id'][0]]        
         self.playGreeting(dialog)
-        
+
     def matchDialog(self, msg):
         """
         Look up the dialog that this message belongs to, if any.
@@ -190,11 +189,11 @@ class SimpleCallAcceptor:
         st.messageReceivedFromTU(response)
 
         del self.dialogs[dialog.getDialogID()]
-        
-    def sendBye(self, callID):
-        del self.ackTimers[callID]
+
+    def sendBye(self, dialog):
         ## actually send a BYE, etc. that's a UAC problem really, i'll
         ## deal with that later
+        pass
 
     def incomingRTP(self, dialog, packet):
         from xshtoom.rtp.formats import PT_NTE
@@ -219,10 +218,18 @@ class SimpleCallAcceptor:
         import os
         f = open(os.path.join(os.path.split(__file__)[0], 'test_audio.raw'))
         #dialog.codec.handle_audio(f.read())
-        data = f.read(320)
-        while data:
-           dialog.codec.handle_audio(data)
-           data = f.read(320)
+        def playSample():
+            data = f.read(320)
+            if data == '':
+                dialog.LC.stop()
+            else:
+                sample = dialog.codec.handle_audio(data)
+                dialog.rtp.handle_media_sample(sample)
+
+
+        dialog.LC = LoopingCall(playSample)
+        dialog.LC.start(0.020)
+
 
     def dropCall(self, *args, **kwargs):
         "For shtoom compatibility."

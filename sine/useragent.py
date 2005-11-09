@@ -28,7 +28,7 @@ class Dialog:
         self.direction = direction
         self.rtp = RTPProtocol(tu, self)
         #XXX move this to a friendlier place
-        self.codec = Codecker(PT_GSM)
+        self.codec = Codecker(PT_PCMU)
         #self.codec.handler = self.rtp.handle_media_sample
         self.file = wave.open('recording.wav', 'wb')
         self.file.setparams((1,2,8000,0,'NONE','NONE'))

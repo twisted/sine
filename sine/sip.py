@@ -439,7 +439,7 @@ def formatAddress(threetuple):
     if display:
         out = '"%s" <%s>'%(display, str(uri))
     else:
-        out = str(uri)
+        out = "<%s>" % str(uri)
     if params:
         out = out + params
     return out
@@ -1764,7 +1764,7 @@ class Proxy:
         else:
             msg.headers['max-forwards'] = ['70']
         msg.headers.setdefault('record-route',
-                               []).insert(0, self.recordroute.toString())
+                               []).insert(0, formatAddress(('', self.recordroute.toString(), {})))
         if msg.headers.get('route', None):
             if 'lr' not in parseAddress(msg.headers['route'][0])[1].other:
                 #more coping with strict routers
@@ -1930,7 +1930,7 @@ class Proxy:
             for code, ct in responses:
                 if code == 401:
                     finalResponse.headers['www-authenticate'].extend(
-                        r.headers.get("www-authenticate", []))
+                        ct.response.headers.get("www-authenticate", []))
 
 
                 elif code == 407:

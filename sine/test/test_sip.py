@@ -97,7 +97,7 @@ Via: SIP/2.0/UDP proxy1.org:5060\r
      ;received=10.1.0.1\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9;received=10.0.0.1\r
 Max-Forwards: 68\r
-Record-Route: sip:proxy2.org:5060;lr,"Awesome Proxy" <sip:proxy1.org:5060>;lr\r
+Record-Route: <sip:proxy2.org:5060;lr>,"Awesome Proxy" <sip:proxy1.org:5060>;lr\r
 From: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 To: Bob <sip:bob@proxy2.org>\r
 Call-ID: 3848276298220188511@client.com\r
@@ -269,7 +269,7 @@ class MessageParsingTestCase(unittest.TestCase):
     def testMultiHeaders(self):
         self.feedMessage(trickyRequest)
         m = self.l[0]
-        self.assertEquals(m.headers['record-route'], ["sip:proxy2.org:5060;lr", '"Awesome Proxy" <sip:proxy1.org:5060>;lr'])
+        self.assertEquals(m.headers['record-route'], ["<sip:proxy2.org:5060;lr>", '"Awesome Proxy" <sip:proxy1.org:5060>;lr'])
     def testContinuationLines(self):
         self.feedMessage(trickyRequest)
         m = self.l[0]
@@ -910,7 +910,7 @@ INVITE sip:bob@proxy2.org SIP/2.0\r
 Via: SIP/2.0/UDP proxy1.org:5060;branch=z9hG4bK1456f8e2565d83971ccb7104399f879b;rport\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9;received=10.0.0.1\r
 Max-Forwards: 69\r
-Record-Route: sip:proxy1.org:5060;lr\r
+Record-Route: <sip:proxy1.org:5060;lr>\r
 From: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 To: Bob <sip:bob@proxy2.org>\r
 Call-ID: 3848276298220188511@client.com\r
@@ -937,8 +937,8 @@ Via: SIP/2.0/UDP proxy2.org:5060;branch=z9hG4bK78c4035c271376836957414fdf557c20;
 Via: SIP/2.0/UDP proxy1.org:5060;branch=z9hG4bK1456f8e2565d83971ccb7104399f879b;received=10.1.0.1;rport=5060\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9;received=10.0.0.1\r
 Max-Forwards: 68\r
-Record-Route: sip:proxy2.org:5060;lr\r
-Record-Route: sip:proxy1.org:5060;lr\r
+Record-Route: <sip:proxy2.org:5060;lr>\r
+Record-Route: <sip:proxy1.org:5060;lr>\r
 From: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 To: Bob <sip:bob@proxy2.org>\r
 Call-ID: 3848276298220188511@client.com\r
@@ -965,8 +965,8 @@ SIP/2.0 180 Ringing\r
 Via: SIP/2.0/UDP proxy2.org:5060;branch=z9hG4bK78c4035c271376836957414fdf557c20;rport\r
 Via: SIP/2.0/UDP proxy1.org:5060;branch=z9hG4bK1456f8e2565d83971ccb7104399f879b;received=10.1.0.1;rport=5060\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9;received=10.0.0.1\r
-Record-Route: sip:proxy2.org:5060;lr\r
-Record-Route: sip:proxy1.org:5060;lr\r
+Record-Route: <sip:proxy2.org:5060;lr>\r
+Record-Route: <sip:proxy1.org:5060;lr>\r
 From: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 To: Bob <sip:bob@proxy2.org>;tag=314159\r
 Call-ID: 3848276298220188511@client.com\r
@@ -980,8 +980,8 @@ interproxy180Response = """\
 SIP/2.0 180 Ringing\r
 Via: SIP/2.0/UDP proxy1.org:5060;branch=z9hG4bK1456f8e2565d83971ccb7104399f879b;received=10.1.0.1;rport=5060\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9;received=10.0.0.1\r
-Record-Route: sip:proxy2.org:5060;lr\r
-Record-Route: sip:proxy1.org:5060;lr\r
+Record-Route: <sip:proxy2.org:5060;lr>\r
+Record-Route: <sip:proxy1.org:5060;lr>\r
 From: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 To: Bob <sip:bob@proxy2.org>;tag=314159\r
 Call-ID: 3848276298220188511@client.com\r
@@ -994,8 +994,8 @@ CSeq: 1 INVITE\r
 alice180Response = """\
 SIP/2.0 180 Ringing\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9;received=10.0.0.1\r
-Record-Route: sip:proxy2.org:5060;lr\r
-Record-Route: sip:proxy1.org:5060;lr\r
+Record-Route: <sip:proxy2.org:5060;lr>\r
+Record-Route: <sip:proxy1.org:5060;lr>\r
 From: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 To: Bob <sip:bob@proxy2.org>;tag=314159\r
 Call-ID: 3848276298220188511@client.com\r
@@ -1010,8 +1010,8 @@ SIP/2.0 200 OK\r
 Via: SIP/2.0/UDP proxy2.org:5060;branch=z9hG4bK78c4035c271376836957414fdf557c20;rport\r
 Via: SIP/2.0/UDP proxy1.org:5060;branch=z9hG4bK1456f8e2565d83971ccb7104399f879b;received=10.1.0.1;rport=5060\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9;received=10.0.0.1\r
-Record-Route: sip:proxy2.org:5060;lr\r
-Record-Route: sip:proxy1.org:5060;lr\r
+Record-Route: <sip:proxy2.org:5060;lr>\r
+Record-Route: <sip:proxy1.org:5060;lr>\r
 From: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 To: Bob <sip:bob@proxy2.org>;tag=314159\r
 Call-ID: 3848276298220188511@client.com\r
@@ -1025,8 +1025,8 @@ interproxy200Response = """\
 SIP/2.0 200 OK\r
 Via: SIP/2.0/UDP proxy1.org:5060;branch=z9hG4bK1456f8e2565d83971ccb7104399f879b;received=10.1.0.1;rport=5060\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9;received=10.0.0.1\r
-Record-Route: sip:proxy2.org:5060;lr\r
-Record-Route: sip:proxy1.org:5060;lr\r
+Record-Route: <sip:proxy2.org:5060;lr>\r
+Record-Route: <sip:proxy1.org:5060;lr>\r
 From: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 To: Bob <sip:bob@proxy2.org>;tag=314159\r
 Call-ID: 3848276298220188511@client.com\r
@@ -1039,8 +1039,8 @@ Contact: <sip:bob@server.com>\r
 alice200Response = """\
 SIP/2.0 200 OK\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9;received=10.0.0.1\r
-Record-Route: sip:proxy2.org:5060;lr\r
-Record-Route: sip:proxy1.org:5060;lr\r
+Record-Route: <sip:proxy2.org:5060;lr>\r
+Record-Route: <sip:proxy1.org:5060;lr>\r
 From: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 To: Bob <sip:bob@proxy2.org>;tag=314159\r
 Call-ID: 3848276298220188511@client.com\r
@@ -1054,8 +1054,8 @@ aliceAckRequest = """\
 ACK sip:bob@proxy2.org SIP/2.0\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74b76\r
 Max-Forwards: 70\r
-Route: sip:proxy1.org:5060;lr\r
-Route: sip:proxy2.org:5060;lr\r
+Route: <sip:proxy1.org:5060;lr>\r
+Route: <sip:proxy2.org:5060;lr>\r
 From: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 To: Bob <sip:bob@proxy2.org>;tag=314159\r
 Call-ID: 3848276298220188511@client.com\r
@@ -1069,8 +1069,8 @@ ACK sip:bob@proxy2.org SIP/2.0\r
 Via: SIP/2.0/UDP proxy1.org:5060;branch=z9hG4bK1ab7cb324549af198a1faf2f9f455575;rport\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74b76;received=10.0.0.1\r
 Max-Forwards: 69\r
-Route: sip:proxy2.org:5060;lr\r
-Record-Route: sip:proxy1.org:5060;lr\r
+Route: <sip:proxy2.org:5060;lr>\r
+Record-Route: <sip:proxy1.org:5060;lr>\r
 From: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 To: Bob <sip:bob@proxy2.org>;tag=314159\r
 Call-ID: 3848276298220188511@client.com\r
@@ -1085,8 +1085,8 @@ Via: SIP/2.0/UDP proxy2.org:5060;branch=z9hG4bKdabf9405095cfe3a7641e493e31e73d7;
 Via: SIP/2.0/UDP proxy1.org:5060;branch=z9hG4bK1ab7cb324549af198a1faf2f9f455575;received=10.1.0.1;rport=5060\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74b76;received=10.0.0.1\r
 Max-Forwards: 68\r
-Record-Route: sip:proxy2.org:5060;lr\r
-Record-Route: sip:proxy1.org:5060;lr\r
+Record-Route: <sip:proxy2.org:5060;lr>\r
+Record-Route: <sip:proxy1.org:5060;lr>\r
 From: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 To: Bob <sip:bob@proxy2.org>;tag=314159\r
 Call-ID: 3848276298220188511@client.com\r
@@ -1099,8 +1099,8 @@ bobByeRequest = """\
 BYE sip:alice@proxy1.org SIP/2.0\r
 Via: SIP/2.0/UDP server.com:5060;branch=z9hG4bKnashds7\r
 Max-Forwards: 70\r
-Route: sip:proxy2.org:5060;lr\r
-Route: sip:proxy1.org:5060;lr\r
+Route: <sip:proxy2.org:5060;lr>\r
+Route: <sip:proxy1.org:5060;lr>\r
 From: Bob <sip:bob@proxy2.org>;tag=314159\r
 To: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 Call-ID: 3848276298220188511@client.com\r
@@ -1113,8 +1113,8 @@ BYE sip:alice@proxy1.org SIP/2.0\r
 Via: SIP/2.0/UDP proxy2.org:5060;branch=z9hG4bKc13670ea4bbb24758149818ab9c878cd;rport\r
 Via: SIP/2.0/UDP server.com:5060;branch=z9hG4bKnashds7;received=10.0.0.2\r
 Max-Forwards: 69\r
-Record-Route: sip:proxy2.org:5060;lr\r
-Route: sip:proxy1.org:5060;lr\r
+Record-Route: <sip:proxy2.org:5060;lr>\r
+Route: <sip:proxy1.org:5060;lr>\r
 From: Bob <sip:bob@proxy2.org>;tag=314159\r
 To: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 Call-ID: 3848276298220188511@client.com\r
@@ -1128,8 +1128,8 @@ Via: SIP/2.0/UDP proxy1.org:5060;branch=z9hG4bK4be41468cfbab722d46f598f3d5e53a9;
 Via: SIP/2.0/UDP proxy2.org:5060;branch=z9hG4bKc13670ea4bbb24758149818ab9c878cd;received=10.1.0.2;rport=5060\r
 Via: SIP/2.0/UDP server.com:5060;branch=z9hG4bKnashds7;received=10.0.0.2\r
 Max-Forwards: 68\r
-Record-Route: sip:proxy1.org:5060;lr\r
-Record-Route: sip:proxy2.org:5060;lr\r
+Record-Route: <sip:proxy1.org:5060;lr>\r
+Record-Route: <sip:proxy2.org:5060;lr>\r
 From: Bob <sip:bob@proxy2.org>;tag=314159\r
 To: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 Call-ID: 3848276298220188511@client.com\r
@@ -1180,7 +1180,7 @@ Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9\r
 Max-Forwards: 70\r
 From: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
 To: Bob <sip:bob@proxy2.org>\r
-Route: sip:proxy1.org:5060;lr\r
+Route: <sip:proxy1.org:5060;lr>\r
 Call-ID: 3848276298220188511@client.com\r
 CSeq: 1 CANCEL\r
 \r

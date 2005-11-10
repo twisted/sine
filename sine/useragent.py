@@ -1,13 +1,15 @@
 from xshtoom.sdp import SDP
 from xshtoom.rtp.protocol import RTPProtocol
 from xshtoom.audio.converters import Codecker, PT_PCMU, PT_GSM
-from sine.sip import responseFromRequest, parseAddress, formatAddress, Response, URL, T1, T2, SIPError, ServerTransaction, SIPLookupError
+from sine.sip import responseFromRequest, parseAddress, formatAddress
+from sine.sip import Response, URL, T1, T2, SIPError, ServerTransaction, SIPLookupError
 from twisted.internet import reactor, defer, task
 from twisted.cred.error import UnauthorizedLogin
 from axiom.userbase  import Preauthenticated
 from axiom.errors import NoSuchUser
 import random, wave
 from zope.interface import Interface, implements
+
 
 class Dialog:
     def __init__(self, tu, contactURI, msg, direction=None):
@@ -34,7 +36,8 @@ class Dialog:
         self.avatar = None
 
     def getDialogID(self):
-        return (self.callID, self.localAddress[2].get('tag',''),
+        return (self.callID,
+                self.localAddress[2].get('tag',''),
                 self.remoteAddress[2].get('tag',''))
 
     def genTag(self):
@@ -63,7 +66,6 @@ class Dialog:
         response.creationFinished()
         return response
 
-
     def playFile(self, f):
         d = defer.Deferred()
         def playSample():
@@ -79,10 +81,11 @@ class Dialog:
         self.LC = task.LoopingCall(playSample)
         self.LC.start(0.020)
         return d
-    
+
     def end(self):
         self.rtp.stopSendingAndReceiving()
         self.avatar.callEnded(self)
+
 
 class ICallRecipient(Interface):
     def acceptCall(dialog):
@@ -100,8 +103,8 @@ class ICallRecipient(Interface):
     def receivedDTMF(dialog, key):
         pass
 
-class UserAgentServer:
 
+class UserAgentServer:
     def __init__(self, portal, localHost, dialogs=None):
         self.portal = portal
         self.localHost = localHost
@@ -140,8 +143,6 @@ class UserAgentServer:
             return defer.maybeDeferred(m, st, msg, addr, dialog).addCallback(
                 lambda x: st)
 
-
-
     def ackTimerRetry(self, dialog,  msg):
         timer, tries = dialog.ackTimer
         if tries > 10:
@@ -152,10 +153,9 @@ class UserAgentServer:
         if tries > 0:
             self.transport.sendResponse(msg)
         dialog.ackTimer = (reactor.callLater(min((2**tries)*T1, T2),
-                                                    self.ackTimerRetry,
-                                                    dialog, msg),
-                                  tries+1)
-
+                                             self.ackTimerRetry,
+                                             dialog, msg),
+                           tries+1)
 
     def process_INVITE(self, st, msg, addr, dialog):
         if dialog:
@@ -165,10 +165,11 @@ class UserAgentServer:
             st.messageReceivedFromTU(dialog.responseFromRequest(501, msg))
             return st
         #otherwise, time to start a new one
-        dialog = Dialog(self, URL(self.host,
-                                  parseAddress(msg.headers['to'][0])[1].username),
-                        msg, direction="server")
-
+        dialog = Dialog(self,
+                        URL(self.host,
+                            parseAddress(msg.headers['to'][0])[1].username),
+                        msg,
+                        direction="server")
         d = dialog.rtp.createRTPSocket(self.host, False)
 
         def credulate(_):
@@ -176,6 +177,7 @@ class UserAgentServer:
                 parseAddress(msg.headers['to'][0])[1].toCredString()),
                                      None, ICallRecipient).addErrback(
                 failedLookup)
+
         def failedLookup(err):
             err.trap(NoSuchUser, UnauthorizedLogin)
             raise SIPLookupError(604)
@@ -200,10 +202,7 @@ class UserAgentServer:
 
             dialog.ackTimer = [None, 0]
             self.ackTimerRetry(dialog, response)
-
-
         return d.addCallback(credulate).addCallback(start)
-
 
     def process_ACK(self, st, msg, addr, dialog):
         #woooo it is an ack for a 200, it is call setup time
@@ -259,11 +258,10 @@ class UserAgentServer:
         pass
 
 
-
 class SimpleCallRecipient:
     implements(ICallRecipient)
     file = None
-    
+
     def acceptCall(self, dialog):
         pass
 

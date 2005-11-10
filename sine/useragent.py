@@ -104,7 +104,7 @@ class ICallRecipient(Interface):
     The order of calls received is:
     - acceptCall
     - callBegan
-    - one or many receiveAudio and/or receiveDTMF
+    - zero or more receiveAudio and/or receiveDTMF (if zero, there is probably a network problem)
     - callEnded
     """
 

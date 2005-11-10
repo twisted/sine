@@ -2,19 +2,20 @@ from twisted.internet import reactor
 from twisted.application.service import IService, Service
 from twisted.cred.portal import IRealm, Portal
 from twisted.cred.checkers import ICredentialsChecker
-from axiom.attributes import integer, inmemory, bytes
+from axiom.attributes import integer, inmemory, bytes, reference
 from axiom.item import Item
-from xmantissa import sip
+from sine import sip
 
 class SIPConfigurationError(RuntimeError):
     """You specified some invalid configuration."""
-    
-    
+
+
 class SIPServer(Item, Service):
-    typename = 'mantissa_sip_powerup'
+    typeName = 'mantissa_sip_powerup'
     schemaVersion = 1
     portno = integer(default=5060)
     hostnames =  bytes()
+    installedOn = reference()
     
     parent = inmemory()
     running = inmemory()
@@ -24,9 +25,6 @@ class SIPServer(Item, Service):
     port = inmemory()
     site = inmemory()
 
-    def __init__(self, hostnames):
-        self.hostnames = hostnames
-        
     def installOn(self, other):
         assert self.installedOn is None, "You cannot install a SIPServer on more than one thing"
         other.powerUp(self, IService)

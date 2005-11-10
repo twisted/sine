@@ -100,6 +100,14 @@ class Dialog:
 
 
 class ICallRecipient(Interface):
+    """
+    The order of calls received is:
+    - acceptCall
+    - callBegan
+    - one or many receiveAudio and/or receiveDTMF
+    - callEnded
+    """
+
     def acceptCall(dialog):
         """
         Decide if this call will be accepted or not: raise a

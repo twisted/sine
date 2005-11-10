@@ -12,6 +12,18 @@ from zope.interface import Interface, implements
 
 
 class Dialog:
+
+    """I represent the state of a SIP call, and am responsible for
+    providing appropriate information for generating requests or
+    responses in that call.
+
+    Note that RFC 3261 distinguishes between dialogs and sessions,
+    because under certain circumstances you can have multiple dialogs
+    in a single session, for instance if the request forks and
+    receives multiple 2xx responses. The right thing to do in that
+    situation isn't clear, so I don't deal with that specially.
+    """
+    
     def __init__(self, tu, contactURI, msg, direction=None):
         self.msg = msg
         self.contactURI = contactURI
@@ -89,22 +101,42 @@ class Dialog:
 
 class ICallRecipient(Interface):
     def acceptCall(dialog):
-        pass
+        """
+        Decide if this call will be accepted or not: raise a
+        SIPError(code) if the call should be rejected, where 'code' is
+        the SIP error code desired.
+        """
 
     def callBegan(dialog):
-        pass
+        """
+        Called after the INVITE response has been ACKed and audio started.
+        """
 
     def callEnded(dialog):
-        pass
+        """
+        Called after BYE received.
+        """
 
     def receivedAudio(dialog, packet):
-        pass
+        """
+        Called with a chunk of audio data, decode into shtoom's
+        preferred format (signed linear 16bit 8000Hz).
+        """
 
     def receivedDTMF(dialog, key):
-        pass
+        """
+        Called with the numeric value of the pressed key. * and # are
+        10 and 11.
+        """
 
 
 class UserAgentServer:
+    """
+    I listen on a sine.sip.SIPTransport and accept incoming SIP calls,
+    directing events from them to an ICallRecipient implementor,
+    looked up via cred.
+    """
+
     def __init__(self, portal, localHost, dialogs=None):
         self.portal = portal
         self.localHost = localHost
@@ -259,6 +291,11 @@ class UserAgentServer:
 
 
 class SimpleCallRecipient:
+    """
+    An example SIP application: upon receipt of a call, a greeting is
+    played, then audio is recorded until hangup or # is pressed.
+    """
+
     implements(ICallRecipient)
     file = None
 

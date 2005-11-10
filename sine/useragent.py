@@ -12,8 +12,8 @@ from zope.interface import Interface, implements
 
 
 class Dialog:
-
-    """I represent the state of a SIP call, and am responsible for
+    """
+    I represent the state of a SIP call, and am responsible for
     providing appropriate information for generating requests or
     responses in that call.
 
@@ -23,7 +23,7 @@ class Dialog:
     receives multiple 2xx responses. The right thing to do in that
     situation isn't clear, so I don't deal with that specially.
     """
-    
+
     def __init__(self, tu, contactURI, msg, direction=None):
         self.msg = msg
         self.contactURI = contactURI
@@ -315,7 +315,6 @@ class SimpleCallRecipient:
         self.endRecording()
 
     def beginRecording(self):
-        import pdb; pdb.set_trace()
         self.file = wave.open('recording.wav', 'wb')
         self.file.setparams((1,2,8000,0,'NONE','NONE'))
 

@@ -1,11 +1,13 @@
 from xshtoom.sdp import SDP
 from xshtoom.rtp.protocol import RTPProtocol
 from xshtoom.audio.converters import Codecker, PT_PCMU, PT_GSM
-from sine.sip import responseFromRequest, parseAddress, formatAddress, Response, URL, T1, T2, SIPError, ServerTransaction
-from twisted.internet import reactor
-from twisted.internet.task import LoopingCall
+from sine.sip import responseFromRequest, parseAddress, formatAddress, Response, URL, T1, T2, SIPError, ServerTransaction, SIPLookupError
+from twisted.internet import reactor, defer, task
+from twisted.cred.error import UnauthorizedLogin
+from axiom.userbase  import Preauthenticated
+from axiom.errors import NoSuchUser
 import random, wave
-
+from zope.interface import Interface, implements
 
 class Dialog:
     def __init__(self, tu, contactURI, msg, direction=None):
@@ -29,9 +31,7 @@ class Dialog:
         self.rtp = RTPProtocol(tu, self)
         #XXX move this to a friendlier place
         self.codec = Codecker(PT_PCMU)
-        #self.codec.handler = self.rtp.handle_media_sample
-        self.file = wave.open('recording.wav', 'wb')
-        self.file.setparams((1,2,8000,0,'NONE','NONE'))
+        self.avatar = None
 
     def getDialogID(self):
         return (self.callID, self.localAddress[2].get('tag',''),
@@ -63,43 +63,54 @@ class Dialog:
         response.creationFinished()
         return response
 
-    def writeAudio(self, packet):
-        self.file.writeframes(self.codec.decode(packet))
 
     def playFile(self, f):
+        d = defer.Deferred()
         def playSample():
             data = f.read(320)
             if data == '':
                 self.LC.stop()
                 del self.LC
+                d.callback(True)
             else:
                 sample = self.codec.handle_audio(data)
                 self.rtp.handle_media_sample(sample)
 
-        self.LC = LoopingCall(playSample)
+        self.LC = task.LoopingCall(playSample)
         self.LC.start(0.020)
-
+        return d
+    
     def end(self):
         self.rtp.stopSendingAndReceiving()
-        #XXX refactor
-        self.file.close()
+        self.avatar.callEnded(self)
 
+class ICallRecipient(Interface):
+    def acceptCall(dialog):
+        pass
 
-class SimpleCallAcceptor:
+    def callBegan(dialog):
+        pass
 
-    # XXX Most of this needs to live in a UserAgentServer class, and
-    # all the hard wired file recording/playback stuff would stay
-    # here.
+    def callEnded(dialog):
+        pass
 
-    def __init__(self, localHost, dialogs=None):
+    def receivedAudio(dialog, packet):
+        pass
+
+    def receivedDTMF(dialog, key):
+        pass
+
+class UserAgentServer:
+
+    def __init__(self, portal, localHost, dialogs=None):
+        self.portal = portal
         self.localHost = localHost
         if dialogs is not None:
             self.dialogs = dialogs
         else:
             self.dialogs = {}
 
-        #XXX wrong
-        self.contactURI = URL(localHost, "jethro")
+        self.host = localHost
 
     def start(self, transport):
         self.transport = transport
@@ -117,16 +128,17 @@ class SimpleCallAcceptor:
             #uh oh, there was an expectation of a dialog
             #but we can't remember it (maybe we crashed?)
             st.messageReceivedFromTU(responseFromRequest(481, msg))
-            return st
+            return defer.succeed(st)
 
             #authentication
             #check for Require
         m = getattr(self, "process_" + msg.method, None)
         if not m:
             st.messageReceivedFromTU(responseFromRequest(405, msg))
-            return st
+            return defer.succeed(st)
         else:
-            return m(st, msg, addr, dialog)
+            return defer.maybeDeferred(m, st, msg, addr, dialog).addCallback(
+                lambda x: st)
 
 
 
@@ -153,33 +165,52 @@ class SimpleCallAcceptor:
             st.messageReceivedFromTU(dialog.responseFromRequest(501, msg))
             return st
         #otherwise, time to start a new one
-        dialog = Dialog(self, self.contactURI, msg,
-                        direction="server")
-        d = dialog.rtp.createRTPSocket(self.contactURI.host, False)
-        sdp = SDP(msg.body)
-        mysdp = dialog.rtp.getSDP(sdp)
-        if not sdp.hasMediaDescriptions():
-            st.messageReceivedFromTU(responseFromRequest(406, msg))
-            return st
-        md = sdp.getMediaDescription('audio')
-        ipaddr = md.ipaddr or sdp.ipaddr
-        remoteAddr = (ipaddr, md.port)
-        dialog.rtp.start(remoteAddr)
-        self.dialogs[dialog.getDialogID()] = dialog
-        response = dialog.responseFromRequest(200, msg, mysdp.show())
-        st.messageReceivedFromTU(response)
+        dialog = Dialog(self, URL(self.host,
+                                  parseAddress(msg.headers['to'][0])[1].username),
+                        msg, direction="server")
 
-        dialog.ackTimer = [None, 0]
-        self.ackTimerRetry(dialog, response)
+        d = dialog.rtp.createRTPSocket(self.host, False)
 
-        return st
+        def credulate(_):
+            return self.portal.login(Preauthenticated(
+                parseAddress(msg.headers['to'][0])[1].toCredString()),
+                                     None, ICallRecipient).addErrback(
+                failedLookup)
+        def failedLookup(err):
+            err.trap(NoSuchUser, UnauthorizedLogin)
+            raise SIPLookupError(604)
+
+        def start((interface, avatar, logout)):
+            dialog.avatar = avatar
+            if hasattr(avatar, 'acceptCall'):
+                avatar.acceptCall(dialog)
+
+            sdp = SDP(msg.body)
+            mysdp = dialog.rtp.getSDP(sdp)
+            if not sdp.hasMediaDescriptions():
+                st.messageReceivedFromTU(responseFromRequest(406, msg))
+                return st
+            md = sdp.getMediaDescription('audio')
+            ipaddr = md.ipaddr or sdp.ipaddr
+            remoteAddr = (ipaddr, md.port)
+            dialog.rtp.start(remoteAddr)
+            self.dialogs[dialog.getDialogID()] = dialog
+            response = dialog.responseFromRequest(200, msg, mysdp.show())
+            st.messageReceivedFromTU(response)
+
+            dialog.ackTimer = [None, 0]
+            self.ackTimerRetry(dialog, response)
+
+
+        return d.addCallback(credulate).addCallback(start)
+
 
     def process_ACK(self, st, msg, addr, dialog):
         #woooo it is an ack for a 200, it is call setup time
         timer = dialog.ackTimer[0]
         if timer.active():
             timer.cancel()
-        self.playGreeting(dialog)
+        dialog.avatar.callBegan(dialog)
 
     def matchDialog(self, msg):
         """
@@ -216,22 +247,47 @@ class SimpleCallAcceptor:
             start = (ord(data[1]) & 128) and True or False
             if start:
                 #print "start inbound dtmf", key
-                self.receivedDTMF(dialog, key)
+                dialog.avatar.receivedDTMF(dialog, key)
             else:
                 #print "stop inbound dtmf", key
                 return
         else:
-            dialog.writeAudio(packet)
-
-    def receivedDTMF(self, dialog, key):
-        print "SOMEBODY PUSHED ", key, "!!"
-
-    def playGreeting(self, dialog):
-        #XXX total hack for expediency
-        import os
-        f = open(os.path.join(os.path.split(__file__)[0], 'test_audio.raw'))
-        dialog.playFile(f)
+            dialog.avatar.receivedAudio(dialog, dialog.codec.decode(packet))
 
     def dropCall(self, *args, **kwargs):
         "For shtoom compatibility."
         pass
+
+
+
+class SimpleCallRecipient:
+    implements(ICallRecipient)
+    file = None
+    
+    def acceptCall(self, dialog):
+        pass
+
+    def callBegan(self, dialog):
+        import os
+        f = open(os.path.join(os.path.split(__file__)[0], 'test_audio.raw'))
+        dialog.playFile(f).addCallback(lambda _: self.beginRecording())
+
+    def receivedDTMF(self, key):
+        if key == 11:
+            self.endRecording()
+
+    def callEnded(self, dialog):
+        self.endRecording()
+
+    def beginRecording(self):
+        import pdb; pdb.set_trace()
+        self.file = wave.open('recording.wav', 'wb')
+        self.file.setparams((1,2,8000,0,'NONE','NONE'))
+
+    def receivedAudio(self, dialog, bytes):
+        if self.file:
+            self.file.writeframes(bytes)
+
+    def endRecording(self):
+        if self.file:
+            self.file.close()

@@ -3,6 +3,7 @@ from sine import sip, useragent
 from twisted import cred
 from twisted.internet import reactor
 from twisted.trial import unittest
+from zope.interface import implements
 
 exampleInvite = """INVITE sip:bob@proxy2.org SIP/2.0\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9\r
@@ -43,7 +44,7 @@ CSeq: 1 INVITE\r
 User-Agent: Divmod Sine\r
 Content-Length: 126\r
 Content-Type: application/sdp\r
-Contact: sip:jethro@127.0.0.2\r
+Contact: sip:bob@127.0.0.2\r
 \r
 v=0\r
 o=bob 69086 69086 IN IP4 127.0.0.2\r
@@ -90,17 +91,32 @@ Content-Length: 0\r
 \r
 """
 
+class FakeCallRecipient:
+    implements(useragent.ICallRecipient)
+
+    def acceptCall(self, dialog):
+        pass
+
+    def callBegan(self, dialog):
+        pass
+    def receivedDTMF(self, key):
+        pass
+    def callEnded(self, dialog):
+        pass
+
+    def receivedAudio(self, dialog, bytes):
+        pass
 
 class CallTerminateTest(FakeClockTestCase):
 
     def setUp(self):
-        r = TestRealm("server.com")
+        r = TestRealm("proxy2.org")
+        r.interface = useragent.ICallRecipient
+        r.users["bob@proxy2.org"] =  FakeCallRecipient()
+        
         p = cred.portal.Portal(r)
         p.registerChecker(PermissiveChecker())
-        #fakeRTP = RTPProtocol(None, "")
-        #fakeRTP._extIP = "127.0.0.2"
-        #fakeRTP._extRTPPort = 8000
-        self.uas = useragent.SimpleCallAcceptor("127.0.0.2")
+        self.uas = useragent.UserAgentServer(p, "127.0.0.2")
         self.sent = []
         self.sip = sip.SIPTransport(self.uas, ["server.com"], 5060)
         self.sip.sendMessage = lambda dest, msg: self.sent.append((dest, msg))

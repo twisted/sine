@@ -1656,7 +1656,7 @@ class Proxy:
     def requestReceived(self, msg, addr):
         #RFC 3261 16.4
         if msg.uri == self.recordroute:
-            msg.uri = msg.headers['route'].pop()
+            msg.uri = parseAddress(msg.headers['route'].pop())[1]
 
         if msg.headers.get('route',None):
             route = parseAddress(msg.headers['route'][0])[1]

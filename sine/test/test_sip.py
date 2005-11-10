@@ -167,7 +167,7 @@ class TestRealm:
     implements(cred.portal.IRealm)
     regs = 0
     permissive = True
-
+    interface = sip.IContact
     def __init__(self, domain='127.0.0.1'):
         self.users = {}
         self.domain = domain
@@ -183,9 +183,8 @@ class TestRealm:
         else:
             raise UnauthorizedLogin()
         try:
-            return sip.IContact, self.users[avatarId], lambda: None
+            return  self.interface, self.users[avatarId], lambda: None
         except KeyError:
-            import pdb; pdb.set_trace()
             raise NoSuchUser
 
 class MessageParsingTestCase(unittest.TestCase):

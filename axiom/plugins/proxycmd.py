@@ -12,13 +12,8 @@ from sine import sipserver
 from xmantissa import webadmin, website, signup
 from vertex.scripts import certcreate
 
-class SIPProxy(usage.Options, axiomatic.AxiomaticSubCommandMixin):
-    "A SIP proxy and registrar backed by an Axiom user database."
-
-    classProvides(plugin.IPlugin, iaxiom.IAxiomaticCommand)
-
-    name = "sip-proxy"
-    description = "SIP proxy and registrar"
+class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
+    "Install a SIP proxy and registrar backed by an Axiom user database."
 
     longdesc = __doc__
 
@@ -64,3 +59,44 @@ class SIPProxy(usage.Options, axiomatic.AxiomaticSubCommandMixin):
 
         ticketSignup.installOn(s)
 
+class SIPProxyConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
+    classProvides(plugin.IPlugin, iaxiom.IAxiomaticCommand)
+
+    name = "sip-proxy"
+    description = "SIP proxy and registrar"
+
+    longdesc = __doc__
+
+    optParameters = [
+        ('ticket-signup-url', None, 'signup', 'URL at which to place a ticket request page')]
+
+    subCommands = [('install', None, Install, "Install SIP Proxy components")]
+
+    def getStore(self):
+        return self.parent.getStore()
+
+    def _benefactorAndSignup(self):
+        s = self.getStore()
+        bene = s.findUnique(sipserver.SineBenefactor)
+
+        ticketSignup = s.findUnique(
+            signup.FreeTicketSignup,
+            signup.FreeTicketSignup.benefactor == bene)
+        return bene, ticketSignup
+
+    def postOptions(self):
+        s = self.getStore()
+
+        def _():
+            try:
+                benefactor, ticketSignup = self._benefactorAndSignup()
+            except eaxiom.ItemNotFound:
+                raise usage.UsageError("SIP Proxy components not yet installed.")
+
+            if self['ticket-signup-url'] is not None:
+                self.didSomething = True
+                ticketSignup.prefixURL = self.decodeCommandLine(self['ticket-signup-url'])
+
+        s.transact(_)
+        if not self.didSomething:
+            self.opt_help()

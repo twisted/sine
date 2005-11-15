@@ -1640,13 +1640,13 @@ responsePriorities = {                  428: 24, 429: 24, 494: 24,
 class Proxy:
     implements(ITransactionUser)
 
-    def __init__(self, portal):
+    def __init__(self, portal, domains):
         self.portal = portal
         self.sessions = {}
         self.responseContexts = {}
         self.finalResponses = {}
         self.registrar = Registrar(portal)
-
+        self.domains = domains
     def start(self, transport):
         self.transport = transport
         self.registrar.start(transport)
@@ -1737,10 +1737,10 @@ class Proxy:
                                        ).addCallback(
                 lambda x: [i[0] for i in x])
         def failedLookup(err):
-            e = err.trap(NoSuchUser, UnauthorizedLogin)
-            if e == UnauthorizedLogin:
+            e = err.trap(UnauthorizedLogin)
+            if addr.host not in self.domains:
                 return [addr]
-            elif e == NoSuchUser:
+            else:
                 raise SIPLookupError(604)
         return d.addCallback(lookedUpSuccessful).addErrback(failedLookup)
 
@@ -2109,6 +2109,7 @@ class Registrar:
                     _ebUnregister, message)
         else:
             name, contactURL, params = parseAddress(contact)# host=addr.host, port=addr.port)
+
             if contact is not None:
                 if expires:
                     expiresInt = int(expires)

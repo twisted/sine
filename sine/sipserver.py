@@ -51,7 +51,7 @@ class SIPServer(Item, Service):
                 'No checkers: '
                 'you need to install a userbase before using this service.')
         portal = Portal(realm, [chkr])
-        self.proxy = sip.Proxy(portal)
+        self.proxy = sip.Proxy(portal, self.hostnames.split(','))
 
         f = sip.SIPTransport(self.proxy, self.hostnames.split(','), self.portno)
         self.port = reactor.listenUDP(self.portno, f)
@@ -76,7 +76,7 @@ class TrivialRegistrarInitializer(Item, InstallableMixin):
         # This won't ever actually show up
         return [webnav.Tab('Preferences', self.storeID, 1.0)]
 
-    def setLocalPart(self, localpart):
+    def setLocalPartAndPassword(self, localpart, password):
         substore = self.store.parent.getItemByID(self.store.idInParent)
         for acc in self.store.parent.query(userbase.LoginAccount,
                                            userbase.LoginAccount.avatars == substore):
@@ -87,6 +87,7 @@ class TrivialRegistrarInitializer(Item, InstallableMixin):
                                  verified=True,
                                  domain=self.domain,
                                  account=acc)
+            acc.password = unicode(password)
             self._reallyEndow()
             return
 
@@ -105,12 +106,12 @@ class TrivialRegistrarInitializerPage(website.AxiomFragment):
         website.AxiomFragment.__init__(self, original)
         self.store = original.store
 
-    def handle_setLocalPart(self, ctx, localpart):
+    def handle_setLocalPartAndPassword(self, ctx, localpart, password):
         for lm in self.original.store.query(userbase.LoginMethod,
                 userbase.LoginMethod.localpart==localpart):
             return livepage.js.alert('SIP user by that name already exists! Please choose a different username')
         else:
-            self.original.setLocalPart(localpart)
+            self.original.setLocalPartAndPassword(localpart, password)
             return livepage.js.alert('OMG! set the local part thing')
 
     def head(self):
@@ -154,22 +155,28 @@ class TrivialContact(Item, InstallableMixin):
         other.powerUp(self, sip.IContact)
 
     def registerAddress(self, physicalURL, expiryTime):
-        self.physicalURL = str(physicalURL)
-        self.expiryTime = Time.fromPOSIXTimestamp(expiryTime)
-
+        self.physicalURL = physicalURL.toString()
+        self.expiryTime = Time.fromPOSIXTimestamp(time.time() + expiryTime)
+        return [(physicalURL, self.expiryTime)]
+    
     def unregisterAddress(self, physicalURL):
         if self.physicalURL != physicalURL:
             raise ValueError, "what"
         self.physicalURL = None
-
+        return [(physicalURL, 0)]
     def getRegistrationInfo(self):
         registered = False
         if self.physicalURL is not None:
             now = time.time()
-            if now < self.expiryTime:
+            if now < self.expiryTime.asPOSIXTimestamp():
                 registered = True
         if registered:
-            return [(self.physicalURL, int(self.expiryTime.asPOSIXTimestamp() - now))]
+            return [(sip.parseURL(self.physicalURL), int(self.expiryTime.asPOSIXTimestamp() - now))]
         else:
             return defer.fail(sip.RegistrationError(480))
- 
+
+    def callIncoming(self, name, uri, caller):
+        pass
+
+    def callOutgoing(self, name, uri):
+        pass

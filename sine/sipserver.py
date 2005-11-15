@@ -2,12 +2,15 @@ from twisted.internet import reactor, defer
 from twisted.application.service import IService, Service
 from twisted.cred.portal import IRealm, Portal
 from twisted.cred.checkers import ICredentialsChecker
-from axiom.attributes import integer, inmemory, bytes, reference, timestamp
+from twisted.python.components import registerAdapter
+from nevow import livepage, tags
+from axiom import userbase
+from axiom.attributes import integer, inmemory, bytes, text, reference, timestamp
 from axiom.item import Item, InstallableMixin
 from axiom.slotmachine import hyper as super
 from epsilon.extime import Time
 from sine import sip
-from xmantissa import ixmantissa, website, webapp
+from xmantissa import ixmantissa, website, webapp, webnav
 from zope.interface import implements
 
 import time
@@ -53,21 +56,89 @@ class SIPServer(Item, Service):
         f = sip.SIPTransport(self.proxy, self.hostnames.split(','), self.portno)
         self.port = reactor.listenUDP(self.portno, f)
 
+class TrivialRegistrarInitializer(Item, InstallableMixin):
+    """
+    ripoff of ClickChronicleInitializer
+    """
+    implements(ixmantissa.INavigableElement)
+
+    typeName = 'sipserver_initializer'
+    schemaVersion = 1
+    
+    installedOn = reference()
+    domain = text()
+
+    def installOn(self, other):
+        super(TrivialRegistrarInitializer, self).installOn(other)
+        other.powerUp(self, ixmantissa.INavigableElement)
+
+    def getTabs(self):
+        # This won't ever actually show up
+        return [webnav.Tab('Preferences', self.storeID, 1.0)]
+
+    def setLocalPart(self, localpart):
+        substore = self.store.parent.getItemByID(self.store.idInParent)
+        for acc in self.store.parent.query(userbase.LoginAccount,
+                                           userbase.LoginAccount.avatars == substore):
+            userbase.LoginMethod(store=self.store.parent,
+                                 localpart=unicode(localpart),
+                                 internal=True,
+                                 protocol=u'sip',
+                                 verified=True,
+                                 domain=self.domain,
+                                 account=acc)
+            self._reallyEndow()
+            return
+
+    def _reallyEndow(self):
+        avatar = self.installedOn
+        avatar.findOrCreate(TrivialContact).installOn(avatar)
+        avatar.powerDown(self, ixmantissa.INavigableElement)
+        self.deleteFromStore()
+
+class TrivialRegistrarInitializerPage(website.AxiomFragment):
+    implements(ixmantissa.INavigableFragment)
+    live = True
+    fragmentName = 'trivial_registrar_initializer'
+
+    def __init__(self, original):
+        website.AxiomFragment.__init__(self, original)
+        self.store = original.store
+
+    def handle_setLocalPart(self, ctx, localpart):
+        for lm in self.original.store.query(userbase.LoginMethod,
+                userbase.LoginMethod.localpart==localpart):
+            return livepage.js.alert('SIP user by that name already exists! Please choose a different username')
+        else:
+            self.original.setLocalPart(localpart)
+            return livepage.js.alert('OMG! set the local part thing')
+
+    def head(self):
+        return tags.script(src='/static/sine/js/initializer.js',
+                           type='text/javascript')
+
+registerAdapter(TrivialRegistrarInitializerPage,
+                TrivialRegistrarInitializer,
+                ixmantissa.INavigableFragment)
+
 class SineBenefactor(Item):
     implements(ixmantissa.IBenefactor)
 
     typeName = 'sine_benefactor'
     schemaVersion = 1
-
+    domain=text()
     # Number of users this benefactor has endowed
     endowed = integer(default = 0)
 
     def endow(self, ticket, avatar):
         self.endowed += 1
+        la = avatar.parent.findFirst(userbase.LoginAccount,
+                avatars=avatar.parent.getItemByID(avatar.idInParent))
 
         avatar.findOrCreate(website.WebSite).installOn(avatar)
         avatar.findOrCreate(webapp.PrivateApplication).installOn(avatar)
-        avatar.findOrCreate(TrivialContact).installOn(avatar)
+        avatar.findOrCreate(TrivialRegistrarInitializer, domain=self.domain).installOn(avatar)
+
 
 class TrivialContact(Item, InstallableMixin):
     implements(sip.IContact)

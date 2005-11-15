@@ -46,10 +46,15 @@ class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
             if not os.path.exists('server.pem'):
                 certcreate.main([])
 
+        s.findOrCreate(
+            website.StaticSite,
+            prefixURL=u'static/sine',
+            staticContentPath=util.sibpath(sipserver.__file__, u'static')).installOn(s)
+
         booth = s.findOrCreate(signup.TicketBooth)
         booth.installOn(s)
 
-        benefactor = s.findOrCreate(sipserver.SineBenefactor)
+        benefactor = s.findOrCreate(sipserver.SineBenefactor, domain=unicode(self['domain']))
 
         ticketSignup = s.findOrCreate(
             signup.FreeTicketSignup,

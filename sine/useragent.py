@@ -154,9 +154,9 @@ class UserAgentServer:
             self.dialogs = dialogs
         else:
             self.dialogs = {}
-
         self.host = localHost
-
+        
+        
     def start(self, transport):
         self.transport = transport
 
@@ -216,7 +216,7 @@ class UserAgentServer:
 
         def credulate(_):
             #this function is now amusingly misnamed 
-            return IVoiceSystem(self.store).localElementByName(parseAddress(msg.headers['to'])[1].username)
+            return IVoiceSystem(self.store).localElementByName(parseAddress(msg.headers['to'][0])[1].username)
             
 
         def failedLookup(err):
@@ -265,7 +265,7 @@ class UserAgentServer:
         return dialog
 
     def process_BYE(self, st, msg, addr, dialog):
-        if not dialog:
+        if not dialog:            
             raise SIPError(481)
         #stop RTP stuff
         dialog.end()

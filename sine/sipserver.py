@@ -217,7 +217,7 @@ class SIPDispatcherService(Item, Service):
                 'No checkers: '
                 'you need to install a userbase before using this service.')
         portal = Portal(realm, [chkr])
-        self.proxy = sip.Proxy(portal, self.hostnames.split(','))
+        self.proxy = sip.Proxy(portal)
         self.dispatcher = sip.SIPDispatcher(portal, self.proxy)
         f = sip.SIPTransport(self.dispatcher, self.hostnames.split(','), self.portno)
         

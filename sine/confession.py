@@ -50,10 +50,9 @@ class ConfessionDispatcher(Item, InstallableMixin):
         if 'confession@' in msg.headers['to'][0]:            
             return self.uas
 
-    def localElementByName(self, msg):
-        #XXX also a hack
-        if 'confession@' in msg.headers['to'][0]:
-            return sip.ICallRecipient(self.store)
+    def localElementByName(self, name):
+        if name == 'confession':
+            return useragent.ICallRecipient(self.store)
         else:
             raise sip.SIPLookupError(404)
         
@@ -68,7 +67,10 @@ class ConfessionUser(Item, InstallableMixin):
     connected = inmemory()
     recordingTarget = inmemory()
     recordingTimer = inmemory()
-    
+    def activate(self):
+        #sigh
+        self.connected = False
+        
     def installOn(self, other):
         super(ConfessionUser, self).installOn(other)
         other.powerUp(self, useragent.ICallRecipient)
@@ -175,6 +177,10 @@ class AnonConfessionUser(Item, InstallableMixin):
     recordingTarget = inmemory()
     recordingTimer = inmemory()
     
+    def activate(self):
+        #sigh
+        self.connected = False
+        
     def installOn(self, other):
         super(AnonConfessionUser, self).installOn(other)
         other.powerUp(self, useragent.ICallRecipient)

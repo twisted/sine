@@ -1640,14 +1640,15 @@ responsePriorities = {                  428: 24, 429: 24, 494: 24,
 class Proxy:
     implements(ITransactionUser)
 
-    def __init__(self, portal, domains):
+    def __init__(self, portal):
         self.portal = portal
         self.sessions = {}
         self.responseContexts = {}
         self.finalResponses = {}
         self.registrar = Registrar(portal)
-        self.domains = domains
+
     def start(self, transport):
+        self.domains = [transport.host]
         self.transport = transport
         self.registrar.start(transport)
         self.recordroute = URL(host=transport.host,
@@ -2161,41 +2162,41 @@ class SIPDispatcher:
     def __init__(self, portal, default):
         self.cts = {}
         self.default = default
-        
-    def start(self, transport):
-        import itertools
+        self.portal = portal
+    def start(self, transport):    
         self.transport = transport
-        for processor in itertools.chain([processors.values() for processors in self.domains]):
-            processor.start(transport)
-
+    
     def requestReceived(self, msg, addr):
-        processor = self.lookupProcessor(msg)
-        processor.requestReceived(msg, addr)
+        self.lookupProcessor(msg).addCallback(lambda p: p.requestReceived(msg, addr))
 
     def responseReceived(self, msg, ct=None):        
-        processor = self.lookupProcessor(msg)
-        if ct:
-            self.cts[ct] = processor
-        processor.responseReceived(msg, ct)
+        def recv(processor):
+            if ct:
+                self.cts[ct] = processor
+            processor.responseReceived(msg, ct)
+        self.lookupProcessor(msg).addCallback(recv)
 
     def clientTransactionTerminated(self, ct):
         self.cts[ct].clientTransactionTerminated(ct)
         del self.cts[ct]
 
     def lookupProcessor(self, msg):
-        fromURL = parseAddress(msg.headers['from'])[1]
+        fromURL = parseAddress(msg.headers['from'][0])[1]
 
         def noSuchUser(err):
-            err.trap(UnauthorizedLogin)
-            toURL = parseAddress(msg.headers['to'])[1]
-            return self.portal.login(Preauthenticated(toURL.toCredString()), None, IVoiceSystem)
+            err.trap(UnauthorizedLogin, NoSuchUser)
+            toURL = parseAddress(msg.headers['to'][0])[1]
+            return self.portal.login(Preauthenticated(toURL.toCredString()), None, IVoiceSystem).addCallback(lambda ((i,a,l)): a)
 
         def gotProcessor(proc):
             if proc is None:
                 return self.default
-
+            return proc
+        
         def gotVoiceSystem(vs):
-            return vs.lookupProcessor(msg)
+            p = vs.lookupProcessor(msg)
+            p.transport = self.transport
+            return p
 
         return self.portal.login(
             Preauthenticated(fromURL.toCredString()),

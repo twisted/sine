@@ -60,9 +60,10 @@ class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
         #Is there a real way to do this?
         
         
-        u = portal.IRealm(s).addAccount(u'confession', u'divmod.com', u'no password :(')
+        u = portal.IRealm(s).addAccount(u'confession', self['domain'], u'no password :(')
         us = u.avatars.open()
         confession.AnonConfessionUser(store=us).installOn(us)
+        confession.ConfessionDispatcher(store=us, localHost=self['domain']).installOn(us)
             
 class ConfessionConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
     classProvides(plugin.IPlugin, iaxiom.IAxiomaticCommand)

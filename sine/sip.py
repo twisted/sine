@@ -1935,7 +1935,7 @@ class Proxy:
 
                 elif code == 407:
                     finalResponse.headers['proxy-authenticate'].extend(
-                        r.headers.get("proxy-authenticate",[]))
+                        ct.response.headers.get("proxy-authenticate",[]))
                     finalResponse.code = 407
         return finalResponse
 
@@ -2138,3 +2138,67 @@ class Registrar:
         return m
 
 
+
+class IVoiceSystem(Interface):
+    """
+    I have nothing to say in defense of this interface other than that
+    exarkun and I thought it was a good idea at the time
+    """
+
+    def lookupProcessor(self, msg):
+        """Returns an ITransactionUser or None"""
+
+    def localElementByName(self, name):
+        """returns an ICallRecipient that can handle calls to this name"""
+        
+class SIPDispatcher:
+    """
+    I allow for handling of specific SIP URLs by various elements,
+    while others get handled by a default element (typically a proxy,
+    or nothing.)
+    """
+    implements(ITransactionUser)
+    def __init__(self, portal, default):
+        self.cts = {}
+        self.default = default
+        
+    def start(self, transport):
+        import itertools
+        self.transport = transport
+        for processor in itertools.chain([processors.values() for processors in self.domains]):
+            processor.start(transport)
+
+    def requestReceived(self, msg, addr):
+        processor = self.lookupProcessor(msg)
+        processor.requestReceived(msg, addr)
+
+    def responseReceived(self, msg, ct=None):        
+        processor = self.lookupProcessor(msg)
+        if ct:
+            self.cts[ct] = processor
+        processor.responseReceived(msg, ct)
+
+    def clientTransactionTerminated(self, ct):
+        self.cts[ct].clientTransactionTerminated(ct)
+        del self.cts[ct]
+
+    def lookupProcessor(self, msg):
+        fromURL = parseAddress(msg.headers['from'])[1]
+
+        def noSuchUser(err):
+            err.trap(UnauthorizedLogin)
+            toURL = parseAddress(msg.headers['to'])[1]
+            return self.portal.login(Preauthenticated(toURL.toCredString()), None, IVoiceSystem)
+
+        def gotProcessor(proc):
+            if proc is None:
+                return self.default
+
+        def gotVoiceSystem(vs):
+            return vs.lookupProcessor(msg)
+
+        return self.portal.login(
+            Preauthenticated(fromURL.toCredString()),
+            None, IVoiceSystem).addErrback(noSuchUser).addCallback(gotVoiceSystem).addCallback(gotProcessor)
+    
+            

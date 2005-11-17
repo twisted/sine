@@ -1,11 +1,11 @@
 from xshtoom.sdp import SDP
 from xshtoom.rtp.protocol import RTPProtocol
 from xshtoom.audio.converters import Codecker, PT_PCMU, PT_GSM
+from xshtoom.audio.aufile import WavReader
 from sine.sip import responseFromRequest, parseAddress, formatAddress
-from sine.sip import Response, URL, T1, T2, SIPError, ServerTransaction, SIPLookupError
+from sine.sip import Response, URL, T1, T2, SIPError, ServerTransaction, SIPLookupError, IVoiceSystem
 from twisted.internet import reactor, defer, task
 from twisted.cred.error import UnauthorizedLogin
-from axiom.userbase  import Preauthenticated
 from axiom.errors import NoSuchUser
 import random, wave
 from zope.interface import Interface, implements
@@ -78,10 +78,10 @@ class Dialog:
         response.creationFinished()
         return response
 
-    def playFile(self, f):
+    def playFile(self, f, samplesize=320):
         d = defer.Deferred()
         def playSample():
-            data = f.read(320)
+            data = f.read(samplesize)
             if data == '':
                 self.LC.stop()
                 del self.LC
@@ -94,6 +94,8 @@ class Dialog:
         self.LC.start(0.020)
         return d
 
+    def playWave(self, f):
+        self.playFile(WavReader(f), samplesize=160)
     def end(self):
         self.rtp.stopSendingAndReceiving()
         self.avatar.callEnded(self)
@@ -145,8 +147,8 @@ class UserAgentServer:
     looked up via cred.
     """
 
-    def __init__(self, portal, localHost, dialogs=None):
-        self.portal = portal
+    def __init__(self, store, localHost, dialogs=None):
+        self.store = store
         self.localHost = localHost
         if dialogs is not None:
             self.dialogs = dialogs
@@ -213,16 +215,15 @@ class UserAgentServer:
         d = dialog.rtp.createRTPSocket(self.host, False)
 
         def credulate(_):
-            return self.portal.login(Preauthenticated(
-                parseAddress(msg.headers['to'][0])[1].toCredString()),
-                                     None, ICallRecipient).addErrback(
-                failedLookup)
+            #this function is now amusingly misnamed 
+            return IVoiceSystem(self.store).localElementByName(parseAddress(msg.headers['to'])[1].username)
+            
 
         def failedLookup(err):
             err.trap(NoSuchUser, UnauthorizedLogin)
             raise SIPLookupError(604)
 
-        def start((interface, avatar, logout)):
+        def start(avatar):
             dialog.avatar = avatar
             if hasattr(avatar, 'acceptCall'):
                 avatar.acceptCall(dialog)

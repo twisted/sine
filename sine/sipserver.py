@@ -9,7 +9,7 @@ from axiom.attributes import integer, inmemory, bytes, text, reference, timestam
 from axiom.item import Item, InstallableMixin
 from axiom.slotmachine import hyper as super
 from epsilon.extime import Time
-from sine import sip
+from sine import sip, useragent
 from xmantissa import ixmantissa, website, webapp, webnav
 from zope.interface import implements
 
@@ -54,6 +54,7 @@ class SIPServer(Item, Service):
         self.proxy = sip.Proxy(portal, self.hostnames.split(','))
 
         f = sip.SIPTransport(self.proxy, self.hostnames.split(','), self.portno)
+        
         self.port = reactor.listenUDP(self.portno, f)
 
 class TrivialRegistrarInitializer(Item, InstallableMixin):
@@ -149,7 +150,8 @@ class TrivialContact(Item, InstallableMixin):
 
     physicalURL = bytes()
     expiryTime = timestamp()
-
+    installedOn = reference()
+    
     def installOn(self, other):
         super(TrivialContact, self).installOn(other)
         other.powerUp(self, sip.IContact)
@@ -180,3 +182,43 @@ class TrivialContact(Item, InstallableMixin):
 
     def callOutgoing(self, name, uri):
         pass
+
+
+class SIPDispatcherService(Item, Service):
+    typeName = 'mantissa_sip_powerup'
+    schemaVersion = 1
+    portno = integer(default=5060)
+    hostnames =  bytes()
+    installedOn = reference()
+    
+    parent = inmemory()
+    running = inmemory()
+    name = inmemory()
+
+    dispatcher = inmemory()
+    proxy = inmemory()
+    port = inmemory()
+    site = inmemory()
+
+    def installOn(self, other):
+        assert self.installedOn is None, "You cannot install a SIPDispatcherService on more than one thing"
+        other.powerUp(self, IService)
+        self.installedOn = other
+
+    def privilegedStartService(self):
+        realm = IRealm(self.store, None)
+        if realm is None:
+            raise SIPConfigurationError(
+                'No realm: '
+                'you need to install a userbase before using this service.')
+        chkr = ICredentialsChecker(self.store, None)
+        if chkr is None:
+            raise SIPConfigurationError(
+                'No checkers: '
+                'you need to install a userbase before using this service.')
+        portal = Portal(realm, [chkr])
+        self.proxy = sip.Proxy(portal, self.hostnames.split(','))
+        self.dispatcher = sip.SIPDispatcher(portal, self.proxy)
+        f = sip.SIPTransport(self.dispatcher, self.hostnames.split(','), self.portno)
+        
+        self.port = reactor.listenUDP(self.portno, f)

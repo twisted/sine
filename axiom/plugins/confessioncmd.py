@@ -1,21 +1,22 @@
 import os
-
 from zope.interface import classProvides
 
-from twisted.python import usage, util
-from twisted.cred import portal
+from twisted.python import usage
 from twisted import plugin
-from axiom.scripts import axiomatic
-from axiom import iaxiom, errors as eaxiom, userbase, scheduler
-from sine import sipserver
 
-from xmantissa import webadmin, website, signup
 from vertex.scripts import certcreate
 
-class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
-    "Install a SIP proxy and registrar backed by an Axiom user database."
+from axiom import iaxiom, errors as eaxiom, scheduler, userbase
+from axiom.scripts import axiomatic
 
-    longdesc = __doc__
+from xmantissa import signup, website
+from sine import confession, sipserver
+
+class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
+    longdesc = """
+    Install confession things
+    """
+
 
     optParameters = [
         ('domain', 'd', 'localhost',
@@ -27,11 +28,6 @@ class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
 
     def postOptions(self):
         s = self.parent.getStore()
-        svc = s.findOrCreate(sipserver.SIPServer,
-                       portno=int(self['port']),
-                       hostnames=self['domain'])
-        svc.installOn(s)
-
         s.findOrCreate(scheduler.Scheduler).installOn(s)
         s.findOrCreate(userbase.LoginSystem).installOn(s)
 
@@ -46,36 +42,34 @@ class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
             if not os.path.exists('server.pem'):
                 certcreate.main([])
 
-        s.findOrCreate(
-            website.StaticSite,
-            prefixURL=u'static/sine',
-            staticContentPath=util.sibpath(sipserver.__file__, u'static')).installOn(s)
-
         booth = s.findOrCreate(signup.TicketBooth)
         booth.installOn(s)
 
-        benefactor = s.findOrCreate(sipserver.SineBenefactor, domain=unicode(self['domain']))
+        benefactor = s.findOrCreate(confession.ConfessionBenefactor, self['domain'])
 
         ticketSignup = s.findOrCreate(
             signup.FreeTicketSignup,
-            prefixURL=u'signup',
             benefactor=benefactor,
+            prefixURL=u'signup',
             booth=booth)
-
         ticketSignup.installOn(s)
 
-class SIPProxyConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
+        svc = s.findOrCreate(sipserver.SIPDispatcherService, localHost=self['domain'])
+        svc.installOn(s)
+
+class ConfessionConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
     classProvides(plugin.IPlugin, iaxiom.IAxiomaticCommand)
 
-    name = "sip-proxy"
-    description = "SIP proxy and registrar"
+    name = 'confession-site'
+    description = 'Chronicler of confessions'
 
-    longdesc = __doc__
+    subCommands = [
+        ('install', None, Install, "Install site-wide Confession components"),
+        ]
 
     optParameters = [
         ('ticket-signup-url', None, 'signup', 'URL at which to place a ticket request page')]
 
-    subCommands = [('install', None, Install, "Install SIP Proxy components")]
     didSomething = False
 
     def getStore(self):
@@ -83,7 +77,7 @@ class SIPProxyConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
 
     def _benefactorAndSignup(self):
         s = self.getStore()
-        bene = s.findUnique(sipserver.SineBenefactor)
+        bene = s.findUnique(confession.ConfessionBenefactor)
 
         ticketSignup = s.findUnique(
             signup.FreeTicketSignup,
@@ -97,7 +91,7 @@ class SIPProxyConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
             try:
                 benefactor, ticketSignup = self._benefactorAndSignup()
             except eaxiom.ItemNotFound:
-                raise usage.UsageError("SIP Proxy components not yet installed.")
+                raise usage.UsageError("Site-wide Confession components not yet installed.")
 
             if self['ticket-signup-url'] is not None:
                 self.didSomething = True
@@ -106,3 +100,4 @@ class SIPProxyConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
         s.transact(_)
         if not self.didSomething:
             self.opt_help()
+

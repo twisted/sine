@@ -185,7 +185,7 @@ class TrivialContact(Item, InstallableMixin):
 
 
 class SIPDispatcherService(Item, Service):
-    typeName = 'mantissa_sip_powerup'
+    typeName = 'sine_sipdispatcher_service'
     schemaVersion = 1
     portno = integer(default=5060)
     hostnames =  bytes()

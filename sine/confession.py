@@ -115,10 +115,11 @@ class ConfessionUser(Item, InstallableMixin):
 
 class TempRecording:
 
-    def __init__(self):
+    def __init__(self, fromAddress):
         file, self.filename = tempfile.mkstemp()
         self.file = wave.open(file, 'wb')
         self.file.setparams((1,2,8000,0,'NONE','NONE'))
+        self.fromAddress = fromAddress        
         
     def write(self, bytes):
         self.file.writeframes(bytes)
@@ -127,7 +128,7 @@ class TempRecording:
         self.file.close()
 
     def saveTo(self, store):
-        r = Recording(store=store)
+        r = Recording(store=store, fromAddress=unicode(self.fromAddress))
         r.audioFromFile(self.filename)
         r.installOn(store)
 
@@ -138,6 +139,8 @@ class Recording(Item, website.PrefixURLMixin):
 
     prefixURL = text()
     length = integer() #seconds in recording
+    fromAddress = text()
+    
     def __init__(self, **args):
         super(Item, self).__init__(**args)
         #XXX is this bad? I don't know anymore
@@ -159,5 +162,58 @@ class Recording(Item, website.PrefixURLMixin):
         return static.Data(self.file, 'audio/x-wav')
     
         
-        
+
+class AnonConfessionUser(Item, InstallableMixin):
+    implements(useragent.ICallRecipient)
+
+    typeName = "sine_anonconfession_user"
+    schemaVersion = 1
+
+    installedOn = reference()
+
+    connected = inmemory()
+    recordingTarget = inmemory()
+    recordingTimer = inmemory()
     
+    def installOn(self, other):
+        super(AnonConfessionUser, self).installOn(other)
+        other.powerUp(self, useragent.ICallRecipient)
+
+    def acceptCall(self, dialog):
+        if self.connected:
+            raise sip.SIPError(486)
+    
+    def callBegan(self, dialog):
+        self.connected = True
+        self.recordingTarget = None
+        import os
+        f = open(os.path.join(os.path.split(__file__)[0], 'test_audio.raw'))
+        dialog.playFile(f).addCallback(lambda _: self.beginRecording(dialog.fromAddress[1].toCredString()))
+
+    def beginRecording(self, fromUser):
+        self.recordingTarget = TempRecording(fromUser)
+        self.recordingTimer = reactor.callLater(45, self.endRecording)
+        
+    def receivedAudio(self, dialog, bytes):
+        if self.connected and self.recordingTarget:            
+            self.recordingTarget.write(bytes)
+
+    def receivedDTMF(self, dialog, key):
+        if self.recordingTarget and key == 11:
+            name = self.recordingTarget.filename
+            self.endRecording()
+            dialog.playWave(name).addCallback(lambda x: self.chooseSavingOrRecording())
+
+    def chooseSavingOrRecording(self):
+        pass
+    
+    def endRecording(self):        
+        if self.recordingTimer.active():
+            self.recordingTimer.cancel()        
+        if self.recordingTarget:
+            self.recordingTarget.close()
+            self.recordingTarget = None
+        
+    def callEnded(self):
+        self.endRecording()
+        self.connected = False

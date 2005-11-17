@@ -3,7 +3,7 @@ from zope.interface import classProvides
 
 from twisted.python import usage
 from twisted import plugin
-
+from twisted.cred import portal
 from vertex.scripts import certcreate
 
 from axiom import iaxiom, errors as eaxiom, scheduler, userbase
@@ -45,7 +45,7 @@ class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
         booth = s.findOrCreate(signup.TicketBooth)
         booth.installOn(s)
 
-        benefactor = s.findOrCreate(confession.ConfessionBenefactor, self['domain'])
+        benefactor = s.findOrCreate(confession.ConfessionBenefactor, localHost=self['domain'])
 
         ticketSignup = s.findOrCreate(
             signup.FreeTicketSignup,
@@ -54,9 +54,16 @@ class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
             booth=booth)
         ticketSignup.installOn(s)
 
-        svc = s.findOrCreate(sipserver.SIPDispatcherService, localHost=self['domain'])
+        svc = s.findOrCreate(sipserver.SIPDispatcherService, hostnames=self['domain'])
         svc.installOn(s)
 
+        #Is there a real way to do this?
+        
+        
+        u = portal.IRealm(s).addAccount(u'confession', u'divmod.com', u'no password :(')
+        us = u.avatars.open()
+        confession.AnonConfessionUser(store=us).installOn(us)
+            
 class ConfessionConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
     classProvides(plugin.IPlugin, iaxiom.IAxiomaticCommand)
 

@@ -28,7 +28,7 @@ class ConfessionBenefactor(Item):
         avatar.findOrCreate(website.WebSite).installOn(avatar)
         avatar.findOrCreate(webapp.PrivateApplication).installOn(avatar)
         avatar.findOrCreate(ConfessionUser).installOn(avatar)
-        avatar.findOrCreate(ConfessionDispatcher, self.localHost).installOn(avatar)
+        avatar.findOrCreate(ConfessionDispatcher, localHost=self.localHost).installOn(avatar)
         
 class ConfessionDispatcher(Item, InstallableMixin):
     implements(sip.IVoiceSystem)
@@ -89,7 +89,7 @@ class ConfessionUser(Item, InstallableMixin):
         dialog.playFile(f).addCallback(lambda _: self.beginRecording())
 
     def beginRecording(self):
-        self.recordingTarget = TempRecording()
+        self.recordingTarget = TempRecording(None)
         self.recordingTimer = reactor.callLater(180, self.endRecording)
         
     def receivedAudio(self, dialog, bytes):
@@ -99,19 +99,21 @@ class ConfessionUser(Item, InstallableMixin):
     def receivedDTMF(self, dialog, key):
         if self.recordingTarget and key == 11:
             name = self.recordingTarget.filename
-            self.endRecording()
-            dialog.playWave(name).addCallback(lambda x: self.chooseSavingOrRecording())
+            r = self.endRecording()
+            dialog.playWave(name).addCallback(lambda x: self.chooseSavingOrRecording(r))
 
-    def chooseSavingOrRecording(self):
+    def chooseSavingOrRecording(self, r):
         #for purposes of demonstration, just save it
-        self.recordingTarget.saveTo(self.store)
+        r.saveTo(self.store)
     
     def endRecording(self):        
         if self.recordingTimer.active():
             self.recordingTimer.cancel()        
         if self.recordingTarget:
             self.recordingTarget.close()
+            r = self.recordingTarget
             self.recordingTarget = None
+            return r
         
     def callEnded(self, dialog):
         self.endRecording()
@@ -156,7 +158,7 @@ class Recording(Item, website.PrefixURLMixin):
     def getFile(self):
         dir = self.store.newDirectory("recordings")
         if not dir.exists():
-            dir.mkdir() #should i really have to do this?
+            dir.makedirs() #should i really have to do this?
         return dir.child("%s.wav" % self.storeID)
         
     file = property(getFile)

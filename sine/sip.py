@@ -2192,17 +2192,18 @@ class SIPDispatcher:
         def noSuchUser(err):
             err.trap(UnauthorizedLogin, NoSuchUser)
             toURL = parseAddress(msg.headers['to'][0])[1]
-            return self.portal.login(Preauthenticated(toURL.toCredString()), None, IVoiceSystem).addCallback(
-                lambda ((i,a,l)): a).addErrback(lambda e: None)
+            return self.portal.login(Preauthenticated(toURL.toCredString()), None, IVoiceSystem).addErrback(lambda e: None)
 
         def gotProcessor(proc):
             if proc is None:
                 return self.default
             return proc
         
-        def gotVoiceSystem(vs):
-            if vs is None:
+        def gotVoiceSystem(x):
+            
+            if x is None:
                 return self.default
+            (i, vs, l) = x
             p = vs.lookupProcessor(msg, self.dialogs)
             p.transport = self.transport
             return p

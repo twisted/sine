@@ -45,9 +45,11 @@ class ConfessionDispatcher(Item, InstallableMixin):
     def activate(self):
         self.uas = useragent.UserAgentServer(self.store, self.localHost)
         
-    def lookupProcessor(self, msg):
+    def lookupProcessor(self, msg, dialogs):
         #XXX haaaaack
-        if 'confession@' in msg.headers['to'][0]:            
+        if 'confession@' in msg.headers['to'][0]:
+            #double hack =/
+            self.uas.dialogs = dialogs
             return self.uas
 
     def localElementByName(self, name):
@@ -101,7 +103,8 @@ class ConfessionUser(Item, InstallableMixin):
             dialog.playWave(name).addCallback(lambda x: self.chooseSavingOrRecording())
 
     def chooseSavingOrRecording(self):
-        pass
+        #for purposes of demonstration, just save it
+        self.recordingTarget.saveTo(self.store)
     
     def endRecording(self):        
         if self.recordingTimer.active():
@@ -110,7 +113,7 @@ class ConfessionUser(Item, InstallableMixin):
             self.recordingTarget.close()
             self.recordingTarget = None
         
-    def callEnded(self):
+    def callEnded(self, dialog):
         self.endRecording()
         self.connected = False
 
@@ -118,8 +121,8 @@ class ConfessionUser(Item, InstallableMixin):
 class TempRecording:
 
     def __init__(self, fromAddress):
-        file, self.filename = tempfile.mkstemp()
-        self.file = wave.open(file, 'wb')
+        fileno, self.filename = tempfile.mkstemp()
+        self.file = wave.open(os.fdopen(fileno, 'wb'), 'wb')
         self.file.setparams((1,2,8000,0,'NONE','NONE'))
         self.fromAddress = fromAddress        
         
@@ -128,7 +131,7 @@ class TempRecording:
 
     def close(self):
         self.file.close()
-
+        
     def saveTo(self, store):
         r = Recording(store=store, fromAddress=unicode(self.fromAddress))
         r.audioFromFile(self.filename)
@@ -144,18 +147,25 @@ class Recording(Item, website.PrefixURLMixin):
     fromAddress = text()
     
     def __init__(self, **args):
-        super(Item, self).__init__(**args)
+        super(Recording, self).__init__(**args)
+
+    def installOn(self, other):
         #XXX is this bad? I don't know anymore
-        self.prefixURL = "recordings/" + self.storeID
-        
+        self.prefixURL = unicode("recordings/" + str(self.storeID))
+        super(Recording, self).installOn(other)
     def getFile(self):
         dir = self.store.newDirectory("recordings")
-        file = dir.child("%s.wav" % self.storeID)
+        if not dir.exists():
+            dir.mkdir() #should i really have to do this?
+        return dir.child("%s.wav" % self.storeID)
+        
     file = property(getFile)
     
-    def audioFromFile(self, filename):
+    def audioFromFile(self, filename):        
         f = self.file.path
-        os.rename(filename, f)
+        import shutil
+        #don't hate me, exarkun
+        shutil.move(filename, f)
         w = wave.open(f)
         self.length = w.getnframes() / w.getframerate()
         w.close()
@@ -194,7 +204,7 @@ class AnonConfessionUser(Item, InstallableMixin):
         self.recordingTarget = None
         import os
         f = open(os.path.join(os.path.split(__file__)[0], 'test_audio.raw'))
-        dialog.playFile(f).addCallback(lambda _: self.beginRecording(dialog.fromAddress[1].toCredString()))
+        dialog.playFile(f).addCallback(lambda _: self.beginRecording(dialog.remoteAddress[1].toCredString()))
 
     def beginRecording(self, fromUser):
         self.recordingTarget = TempRecording(fromUser)
@@ -207,19 +217,22 @@ class AnonConfessionUser(Item, InstallableMixin):
     def receivedDTMF(self, dialog, key):
         if self.recordingTarget and key == 11:
             name = self.recordingTarget.filename
-            self.endRecording()
-            dialog.playWave(name).addCallback(lambda x: self.chooseSavingOrRecording())
+            r = self.endRecording()
+            dialog.playWave(name).addCallback(lambda x: self.chooseSavingOrRecording(r))
 
-    def chooseSavingOrRecording(self):
-        pass
+    def chooseSavingOrRecording(self, r):
+        #for purposes of demonstration, just save it
+        r.saveTo(self.store)
     
     def endRecording(self):        
         if self.recordingTimer.active():
             self.recordingTimer.cancel()        
         if self.recordingTarget:
             self.recordingTarget.close()
+            r = self.recordingTarget
             self.recordingTarget = None
+            return r
         
-    def callEnded(self):
+    def callEnded(self, dialog):
         self.endRecording()
         self.connected = False

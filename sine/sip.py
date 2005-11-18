@@ -2163,6 +2163,8 @@ class SIPDispatcher:
         self.cts = {}
         self.default = default
         self.portal = portal
+        self.dialogs = {}
+        
     def start(self, transport):    
         self.transport = transport
     
@@ -2194,7 +2196,7 @@ class SIPDispatcher:
             return proc
         
         def gotVoiceSystem(vs):
-            p = vs.lookupProcessor(msg)
+            p = vs.lookupProcessor(msg, self.dialogs)
             p.transport = self.transport
             return p
 

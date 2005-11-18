@@ -95,7 +95,7 @@ class Dialog:
         return d
 
     def playWave(self, f):
-        self.playFile(WavReader(f), samplesize=160)
+        return self.playFile(WavReader(f), samplesize=160)
     def end(self):
         self.rtp.stopSendingAndReceiving()
         self.avatar.callEnded(self)
@@ -155,7 +155,7 @@ class UserAgentServer:
         else:
             self.dialogs = {}
         self.host = localHost
-        
+        1
         
     def start(self, transport):
         self.transport = transport

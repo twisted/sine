@@ -10,7 +10,7 @@ from axiom import iaxiom, errors as eaxiom, scheduler, userbase
 from axiom.scripts import axiomatic
 
 from xmantissa import signup, website
-from sine import confession, sipserver
+from sine import confession, sipserver, echo
 
 class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
     longdesc = """
@@ -64,7 +64,12 @@ class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
         us = u.avatars.open()
         confession.AnonConfessionUser(store=us).installOn(us)
         confession.ConfessionDispatcher(store=us, localHost=self['domain']).installOn(us)
-            
+        
+        u = portal.IRealm(s).addAccount(u'echo', self['domain'], u'no password :(')
+        us = u.avatars.open()
+        echo.EchoTest(store=us).installOn(us)
+        echo.EchoDispatcher(store=us, localHost=self['domain']).installOn(us)
+        
 class ConfessionConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
     classProvides(plugin.IPlugin, iaxiom.IAxiomaticCommand)
 

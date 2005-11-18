@@ -1859,7 +1859,10 @@ class Proxy:
 
         def makeSureSomebodyWasAuthorized(value):
             if not somebodyWasAuthorized:
-                raise SIPError(401)
+                if uri.host not in self.domains:
+                    raise SIPError(401)
+                else:
+                    raise SIPError(604)
             return value
 
         return recordIt(fromuri, uri, 'callOutgoing').addCallback(
@@ -2167,7 +2170,8 @@ class SIPDispatcher:
         
     def start(self, transport):    
         self.transport = transport
-    
+        self.default.start(transport)
+        
     def requestReceived(self, msg, addr):
         self.lookupProcessor(msg).addCallback(lambda p: p.requestReceived(msg, addr))
 
@@ -2188,7 +2192,8 @@ class SIPDispatcher:
         def noSuchUser(err):
             err.trap(UnauthorizedLogin, NoSuchUser)
             toURL = parseAddress(msg.headers['to'][0])[1]
-            return self.portal.login(Preauthenticated(toURL.toCredString()), None, IVoiceSystem).addCallback(lambda ((i,a,l)): a)
+            return self.portal.login(Preauthenticated(toURL.toCredString()), None, IVoiceSystem).addCallback(
+                lambda ((i,a,l)): a).addErrback(lambda e: None)
 
         def gotProcessor(proc):
             if proc is None:
@@ -2196,6 +2201,8 @@ class SIPDispatcher:
             return proc
         
         def gotVoiceSystem(vs):
+            if vs is None:
+                return self.default
             p = vs.lookupProcessor(msg, self.dialogs)
             p.transport = self.transport
             return p

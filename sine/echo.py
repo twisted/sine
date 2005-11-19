@@ -61,8 +61,10 @@ class EchoTest(Item, InstallableMixin):
             sample = dialog.codec.handle_audio(bytes)
             dialog.rtp.handle_media_sample(sample)
 
-    def receivedDTMF(self, dialog):
-        pass
+    def receivedDTMF(self, dialog, key):
+        if key == 11:
+            raise useragent.Hangup()
+        
     def callEnded(self, dialog):
         pass
     

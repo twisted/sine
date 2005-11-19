@@ -3,13 +3,16 @@ from xshtoom.rtp.protocol import RTPProtocol
 from xshtoom.audio.converters import Codecker, PT_PCMU, PT_GSM
 from xshtoom.audio.aufile import WavReader
 from sine.sip import responseFromRequest, parseAddress, formatAddress
-from sine.sip import Response, URL, T1, T2, SIPError, ServerTransaction, SIPLookupError, IVoiceSystem
+from sine.sip import Response, Request, URL, T1, T2, SIPError
+from sine.sip import ClientTransaction, ServerTransaction, SIPLookupError, IVoiceSystem, ITransactionUser
 from twisted.internet import reactor, defer, task
 from twisted.cred.error import UnauthorizedLogin
 from axiom.errors import NoSuchUser
 import random, wave
 from zope.interface import Interface, implements
 
+class Hangup(Exception):
+    "Raise this in ITransactionUser.receivedAudio or .receivedDTMF to end the call"
 
 class Dialog:
     """
@@ -78,6 +81,23 @@ class Dialog:
         response.creationFinished()
         return response
 
+    def generateBye(self):
+        r = Request('BYE', parseAddress(self.msg.headers['contact'][0])[1])
+        if 'route' in self.msg.headers:
+            r.headers['route'] = self.msg.headers['route'][:]
+            if 'lr' not in parseAddress(msg.headers['route'][0])[1].other:
+                msg.headers['route'].append(msg.uri.toString())
+                msg.uri = parseAddress(msg.headers['route'].pop())[1]
+                
+        r.addHeader('to', formatAddress(self.remoteAddress))
+        r.addHeader('from', formatAddress(self.localAddress))
+        r.addHeader('cseq', "%s BYE" % (self.localCSeq,))
+        self.localCSeq += 1
+        r.addHeader('call-id', self.msg.headers['call-id'][0])
+        r.addHeader('contact', self.contactURI)
+        r.addHeader('content-length', 0)
+        return r
+    
     def playFile(self, f, samplesize=320):
         d = defer.Deferred()
         def playSample():
@@ -146,7 +166,7 @@ class UserAgentServer:
     directing events from them to an ICallRecipient implementor,
     looked up via cred.
     """
-
+    implements(ITransactionUser)
     def __init__(self, store, localHost, dialogs=None):
         self.store = store
         self.localHost = localHost
@@ -155,7 +175,6 @@ class UserAgentServer:
         else:
             self.dialogs = {}
         self.host = localHost
-        1
         
     def start(self, transport):
         self.transport = transport
@@ -275,24 +294,40 @@ class UserAgentServer:
         del self.dialogs[dialog.getDialogID()]
 
     def sendBye(self, dialog):
-        ## actually send a BYE, etc. that's a UAC problem really, i'll
-        ## deal with that later
+        bye = dialog.generateBye()
+        rs = bye.headers.get('route', None)
+        if rs:
+            dest = parseAddress(rs[0])[1]
+        else:
+            dest = bye.uri
+        ClientTransaction(self.transport, self, bye, (dest.host, dest.port))
+        dialog.end()
+    def responseReceived(self, response, ct):
+        #presumably just BYE responses
         pass
 
+    def clientTransactionTerminated(self, ct):
+        #do we care?
+        pass
+    
     def incomingRTP(self, dialog, packet):
         from xshtoom.rtp.formats import PT_NTE
-        if packet.header.ct is PT_NTE:
-            data = packet.data
-            key = ord(data[0])
-            start = (ord(data[1]) & 128) and True or False
-            if start:
-                #print "start inbound dtmf", key
-                dialog.avatar.receivedDTMF(dialog, key)
+        try:
+            if packet.header.ct is PT_NTE:
+                data = packet.data
+                key = ord(data[0])
+                start = (ord(data[1]) & 128) and True or False
+                if start:
+                    #print "start inbound dtmf", key
+                    dialog.avatar.receivedDTMF(dialog, key)
+                else:
+                    #print "stop inbound dtmf", key
+                    return
             else:
-                #print "stop inbound dtmf", key
-                return
-        else:
-            dialog.avatar.receivedAudio(dialog, dialog.codec.decode(packet))
+                dialog.avatar.receivedAudio(dialog, dialog.codec.decode(packet))
+        except Hangup:
+            self.sendBye(dialog)
+            
 
     def dropCall(self, *args, **kwargs):
         "For shtoom compatibility."

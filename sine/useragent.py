@@ -43,7 +43,7 @@ class Dialog:
             self.remoteAddress = toAddress
         else:
             raise ValueError, "Dialog needs a direction"
-
+        self.routeSet = [parseAddress(route) for route in msg.headers.get('record-route', [])]
         self.localAddress[2]['tag'] = self.genTag()
         self.localCSeq = random.randint(1E11,1E12)
         self.direction = direction
@@ -84,11 +84,12 @@ class Dialog:
 
     def generateBye(self):
         r = Request('BYE', parseAddress(self.msg.headers['contact'][0])[1])
-        if 'route' in self.msg.headers:
-            r.headers['route'] = self.msg.headers['route'][:]
-            if 'lr' not in parseAddress(msg.headers['route'][0])[1].other:
-                msg.headers['route'].append(msg.uri.toString())
-                msg.uri = parseAddress(msg.headers['route'].pop())[1]
+        
+        if self.routeSet:
+            r.headers['route'] = [formatAddress(route) for route in self.routeSet]
+            if 'lr' not in self.routeSet[0][1].other:
+                msg.headers['route'].append(formatAddress(("", msg.uri, {})))
+                msg.uri = msg.headers['route'].pop()[1]
                 
         r.addHeader('to', formatAddress(self.remoteAddress))
         r.addHeader('from', formatAddress(self.localAddress))
@@ -109,7 +110,8 @@ class Dialog:
             else:
                 sample = self.codec.handle_audio(data)
                 self.rtp.handle_media_sample(sample)
-
+        if self.LC:
+            self.LC.stop()
         self.LC = task.LoopingCall(playSample)
         self.LC.start(0.020)
         return d

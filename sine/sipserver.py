@@ -9,9 +9,10 @@ from axiom.attributes import integer, inmemory, bytes, text, reference, timestam
 from axiom.item import Item, InstallableMixin
 from axiom.slotmachine import hyper as super
 from epsilon.extime import Time
-from sine import sip, useragent
+from sine import sip 
 from xmantissa import ixmantissa, website, webapp, webnav
 from zope.interface import implements
+from axiom.errors import NoSuchUser
 
 import time
 
@@ -25,7 +26,7 @@ class SIPServer(Item, Service):
     portno = integer(default=5060)
     hostnames =  bytes()
     installedOn = reference()
-    
+
     parent = inmemory()
     running = inmemory()
     name = inmemory()
@@ -50,11 +51,11 @@ class SIPServer(Item, Service):
             raise SIPConfigurationError(
                 'No checkers: '
                 'you need to install a userbase before using this service.')
-        portal = Portal(realm, [chkr])
-        self.proxy = sip.Proxy(portal, self.hostnames.split(','))
+        portal = PSTNPortalWrapper(Portal(realm, [chkr]), 'joule.divmod.com', 5061)
+        self.proxy = sip.Proxy(portal)
 
         f = sip.SIPTransport(self.proxy, self.hostnames.split(','), self.portno)
-        
+
         self.port = reactor.listenUDP(self.portno, f)
 
 class TrivialRegistrarInitializer(Item, InstallableMixin):
@@ -65,7 +66,7 @@ class TrivialRegistrarInitializer(Item, InstallableMixin):
 
     typeName = 'sipserver_initializer'
     schemaVersion = 1
-    
+
     installedOn = reference()
     domain = text()
 
@@ -141,6 +142,51 @@ class SineBenefactor(Item):
         avatar.findOrCreate(webapp.PrivateApplication).installOn(avatar)
         avatar.findOrCreate(TrivialRegistrarInitializer, domain=self.domain).installOn(avatar)
 
+class PSTNContact:
+    implements(sip.IContact)
+    def __init__(self, avatarId, targethost, targetport):
+        self.id = avatarId
+        self.targetport = targetport
+        self.targethost = targethost
+
+    def getRegistrationInfo(self, caller):
+        return [(sip.URL(self.targethost, port=self.targetport, username=self.id), 0)]
+
+    def callIncoming(self, name, uri, caller):
+        if caller is None:
+            # ta da
+            raise sip.SIPError(401)
+
+    def registerAddress(self, *args):
+        from twisted.cred.error import UnauthorizedLogin
+        raise UnauthorizedLogin
+
+    def incompleteImplementation(self, *args, **kw):
+        raise NotImplementedError("Asterisk PSTN numbers are NOT general-purpose IContacts!")
+
+    unregisterAddress = incompleteImplementation
+    callOutgoing = incompleteImplementation
+
+class PSTNPortalWrapper:
+
+    def __init__(self, realPortal, targetHost, targetPort):
+        self.portal = realPortal
+        self.targethost = targetHost
+        self.targetport = targetPort
+
+    def login(self, credentials, mind, interface):
+        D = self.realPortal.login(credentials, mind, interface)
+        def logcb(thing):
+            return thing
+        def eb(fail):
+            fail.trap(NoSuchUser)
+            if interface == sip.IContact:
+                return (interface, PSTNContact(credentials.username.split('@')[0], self.targethost, self.targetport), lambda: None)
+            else:
+                return fail
+        D.addCallback(logcb)
+        D.addErrback(eb)
+        return D
 
 class TrivialContact(Item, InstallableMixin):
     implements(sip.IContact)
@@ -151,7 +197,7 @@ class TrivialContact(Item, InstallableMixin):
     physicalURL = bytes()
     expiryTime = timestamp()
     installedOn = reference()
-    
+
     def installOn(self, other):
         super(TrivialContact, self).installOn(other)
         other.powerUp(self, sip.IContact)
@@ -160,7 +206,7 @@ class TrivialContact(Item, InstallableMixin):
         self.physicalURL = physicalURL.toString()
         self.expiryTime = Time.fromPOSIXTimestamp(time.time() + expiryTime)
         return [(physicalURL, self.expiryTime)]
-    
+
     def unregisterAddress(self, physicalURL):
         if self.physicalURL != physicalURL:
             raise ValueError, "what"
@@ -178,10 +224,10 @@ class TrivialContact(Item, InstallableMixin):
             return defer.fail(sip.RegistrationError(480))
 
     def callIncoming(self, name, uri, caller):
-        pass
+        Call(self.store, name=name, time=Time(), uri=str(uri), kind='from')
 
     def callOutgoing(self, name, uri):
-        pass
+        Call(self.store, name=name, time=Time(), uri=str(uri), kind='to')
 
 
 class SIPDispatcherService(Item, Service):
@@ -190,7 +236,7 @@ class SIPDispatcherService(Item, Service):
     portno = integer(default=5060)
     hostnames =  bytes()
     installedOn = reference()
-    
+
     parent = inmemory()
     running = inmemory()
     name = inmemory()
@@ -220,5 +266,13 @@ class SIPDispatcherService(Item, Service):
         self.proxy = sip.Proxy(portal)
         self.dispatcher = sip.SIPDispatcher(portal, self.proxy)
         f = sip.SIPTransport(self.dispatcher, self.hostnames.split(','), self.portno)
-        
+
         self.port = reactor.listenUDP(self.portno, f)
+
+class Call(Item):
+    typeName = "sine_call"
+    schemaVersion = 1
+    name=text()
+    uri = text()
+    time = timestamp()
+    kind = text()

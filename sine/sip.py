@@ -1676,7 +1676,8 @@ class Proxy:
 
 
         def _cb(x, st):
-            return self.findTargets(msg.uri).addCallback(
+            fromURL = parseAddress(msg.headers['from'][0])[1]
+            return self.findTargets(msg.uri, fromURL).addCallback(
                 self.forwardRequest, msg, st)
 
         def _eb(err):
@@ -1727,14 +1728,16 @@ class Proxy:
         def _cb(addrs):
             msg, addr = self.processRouting(originalMsg, addrs[0])
             self.transport.sendRequest(msg, (addr.host, addr.port))
-        self.findTargets(originalMsg.uri).addCallback(_cb)
+        fromURL = parseAddress(originalMsg.headers['from'][0])[1]
+        self.findTargets(originalMsg.uri, fromURL).addCallback(_cb)
 
-    def findTargets(self, addr):
+    def findTargets(self, addr, caller):
         d = self.portal.login(Preauthenticated(addr.toCredString()),
                               None, IContact)
 
         def lookedUpSuccessful((ifac, contact, logout)):
-            return defer.maybeDeferred(contact.getRegistrationInfo
+            return defer.maybeDeferred(contact.getRegistrationInfo,
+                                       caller
                                        ).addCallback(
                 lambda x: [i[0] for i in x])
         def failedLookup(err):
@@ -2015,10 +2018,12 @@ class Registrar:
         self.transport = transport
 
     def getRegistrationInfo(self, url):
+        #I bet nobody calls this!
+        import pdb; pdb.set_trace()
         #XXX Need to think about impact of all these cred lookups in a
         #cluster environment
         def _cbRegInfo((i,a,l)):
-            return a.getRegistrationInfo()
+            return a.getRegistrationInfo("__registrar__")
         def _ebRegInfo(failure):
             failure.trap(UnauthorizedLogin)
             return None
@@ -2122,7 +2127,8 @@ class Registrar:
                 d = defer.maybeDeferred(avatar.registerAddress,
                                         contactURL, expiresInt)
             else:
-                d = defer.maybeDeferred(avatar.getRegistrationInfo)
+                name, toURL, params = parseAddress(message.headers["to"][0], clean=1)
+                d = defer.maybeDeferred(avatar.getRegistrationInfo, toURL)
             d.addCallback(_cbRegister, message).addErrback(self._ebLogin,
                                                            message, addr)
             return d
@@ -2154,7 +2160,7 @@ class IVoiceSystem(Interface):
 
     def localElementByName(self, name):
         """returns an ICallRecipient that can handle calls to this name"""
-        
+
 class SIPDispatcher:
     """
     I allow for handling of specific SIP URLs by various elements,
@@ -2167,15 +2173,15 @@ class SIPDispatcher:
         self.default = default
         self.portal = portal
         self.dialogs = {}
-        
-    def start(self, transport):    
+
+    def start(self, transport):
         self.transport = transport
         self.default.start(transport)
-        
+
     def requestReceived(self, msg, addr):
         self.lookupProcessor(msg).addCallback(lambda p: p.requestReceived(msg, addr))
 
-    def responseReceived(self, msg, ct=None):        
+    def responseReceived(self, msg, ct=None):
         def recv(processor):
             if ct:
                 self.cts[ct] = processor
@@ -2198,9 +2204,9 @@ class SIPDispatcher:
             if proc is None:
                 return self.default
             return proc
-        
+
         def gotVoiceSystem(x):
-            
+
             if x is None:
                 return self.default
             (i, vs, l) = x
@@ -2211,5 +2217,3 @@ class SIPDispatcher:
         return self.portal.login(
             Preauthenticated(fromURL.toCredString()),
             None, IVoiceSystem).addErrback(noSuchUser).addCallback(gotVoiceSystem).addCallback(gotProcessor)
-    
-            

@@ -1,7 +1,7 @@
 from xshtoom.sdp import SDP
 from xshtoom.rtp.protocol import RTPProtocol
 from xshtoom.audio.converters import Codecker, PT_PCMU, PT_GSM
-from xshtoom.audio.aufile import WavReader
+from xshtoom.audio.aufile import WavReader, GSMReader
 from sine.sip import responseFromRequest, parseAddress, formatAddress
 from sine.sip import Response, Request, URL, T1, T2, SIPError
 from sine.sip import ClientTransaction, ServerTransaction, SIPLookupError, IVoiceSystem, ITransactionUser
@@ -27,6 +27,8 @@ class Dialog:
     situation isn't clear, so I don't deal with that specially.
     """
 
+    callResponder = None
+
     def __init__(self, tu, contactURI, msg, direction=None):
         self.msg = msg
         self.contactURI = contactURI
@@ -48,8 +50,7 @@ class Dialog:
         self.rtp = RTPProtocol(tu, self)
         #XXX move this to a friendlier place
         self.codec = Codecker(PT_PCMU)
-        self.avatar = None
-
+        self.LC = None
     def getDialogID(self):
         return (self.callID,
                 self.localAddress[2].get('tag',''),
@@ -103,8 +104,7 @@ class Dialog:
         def playSample():
             data = f.read(samplesize)
             if data == '':
-                self.LC.stop()
-                del self.LC
+                self.stopPlaying()
                 d.callback(True)
             else:
                 sample = self.codec.handle_audio(data)
@@ -116,12 +116,21 @@ class Dialog:
 
     def playWave(self, f):
         return self.playFile(WavReader(f), samplesize=160)
+    
+    def stopPlaying(self):
+        if self.LC:
+            self.LC.stop()
+            self.LC = None
+            
     def end(self):
         self.rtp.stopSendingAndReceiving()
-        self.avatar.callEnded(self)
-
+        self.callResponder.callEnded(self)
 
 class ICallRecipient(Interface):
+    def buildCallResponder(self, dialog):
+        "Return an ICallResponder"
+
+class ICallResponder(Interface):
     """
     The order of calls received is:
     - acceptCall
@@ -243,10 +252,7 @@ class UserAgentServer:
             raise SIPLookupError(604)
 
         def start(avatar):
-            dialog.avatar = avatar
-            if hasattr(avatar, 'acceptCall'):
-                avatar.acceptCall(dialog)
-
+            dialog.callResponder = avatar.buildCallResponder(dialog)
             sdp = SDP(msg.body)
             mysdp = dialog.rtp.getSDP(sdp)
             if not sdp.hasMediaDescriptions():
@@ -269,7 +275,7 @@ class UserAgentServer:
         timer = dialog.ackTimer[0]
         if timer.active():
             timer.cancel()
-        dialog.avatar.callBegan(dialog)
+        dialog.callResponder.callBegan(dialog)
 
     def matchDialog(self, msg):
         """
@@ -312,21 +318,23 @@ class UserAgentServer:
     
     def incomingRTP(self, dialog, packet):
         from xshtoom.rtp.formats import PT_NTE
-        try:
-            if packet.header.ct is PT_NTE:
-                data = packet.data
-                key = ord(data[0])
-                start = (ord(data[1]) & 128) and True or False
-                if start:
-                    #print "start inbound dtmf", key
-                    dialog.avatar.receivedDTMF(dialog, key)
-                else:
-                    #print "stop inbound dtmf", key
-                    return
+        if packet.header.ct is PT_NTE:
+            data = packet.data
+            key = ord(data[0])
+            start = (ord(data[1]) & 128) and True or False
+            if start:
+                #print "start inbound dtmf", key
+                d = defer.maybeDeferred(dialog.callResponder.receivedDTMF, dialog, key)
             else:
-                dialog.avatar.receivedAudio(dialog, dialog.codec.decode(packet))
-        except Hangup:
-            self.sendBye(dialog)
+                #print "stop inbound dtmf", key
+                return
+        else:
+            d = defer.maybeDeferred(dialog.callResponder.receivedAudio, dialog, dialog.codec.decode(packet))
+        def e(err):
+            err.trap(Hangup)
+            #fudge a little to let playback finish
+            reactor.callLater(0.5, self.sendBye, dialog)
+        d.addErrback(e)
             
 
     def dropCall(self, *args, **kwargs):

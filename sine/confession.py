@@ -5,11 +5,17 @@ from axiom.slotmachine import hyper as super
 from xmantissa import website, webapp, ixmantissa
 from zope.interface import implements
 from sine import sip, useragent
+from xshtoom.audio.aufile import GSMReader
 from axiom.attributes import inmemory, reference, integer, text, bytes
-from twisted.internet import reactor
+from twisted.internet import reactor, defer
 from nevow import static
+from epsilon.modal import ModalType, mode
 import tempfile, wave, os
 
+ASTERISK_SOUNDS_DIR = "/usr/share/asterisk/sounds"
+
+def soundFile(name):
+    return GSMReader(open(os.path.join(ASTERISK_SOUNDS_DIR, name+".gsm")))
 
 class ConfessionBenefactor(Item):
     implements(ixmantissa.IBenefactor)
@@ -65,49 +71,88 @@ class ConfessionUser(Item, InstallableMixin):
     schemaVersion = 1
 
     installedOn = reference()
-
-    connected = inmemory()
-    recordingTarget = inmemory()
-    recordingTimer = inmemory()
-    def activate(self):
-        #sigh
-        self.connected = False
-        
+    
     def installOn(self, other):
         super(ConfessionUser, self).installOn(other)
         other.powerUp(self, useragent.ICallRecipient)
 
-    def acceptCall(self, dialog):
-        if self.connected:
-            raise sip.SIPError(486)
-    
-    def callBegan(self, dialog):
-        self.connected = True
-        self.recordingTarget = None
-        import os
-        f = open(os.path.join(os.path.split(__file__)[0], 'test_audio.raw'))
-        dialog.playFile(f).addCallback(lambda _: self.beginRecording())
+    def buildCallResponder(self, dialog):
+        return ConfessionCall(self)
 
-    def beginRecording(self):
-        self.recordingTarget = TempRecording(None)
-        self.recordingTimer = reactor.callLater(180, self.endRecording)
+class ConfessionCall(object):
+    __metaclass__ = ModalType
+    initialMode = 'recording'
+    modeAttribute = 'mode'
+    implements(useragent.ICallResponder)
+    recordingTarget = None
+    recordingTimer = None
+
+    def __init__(self, avatar, anon=False):
+        self.avatar = avatar
+        self.anon=anon
+        
+    def callBegan(self, dialog):        
+        def playBeep(_):
+            dialog.playFile(soundFile("beep"))
+        d = dialog.playFile(soundFile("vm-intro")).addCallback(playBeep)
+        if self.anon:
+            d.addCallback(lambda _: self.beginRecording(dialog.remoteAddress[1].toCredString()))
+        else:
+            d.addCallback(lambda _: self.beginRecording())
+
+    def beginRecording(self, target=None):
+        if self.anon:
+            timeLimit = 45
+        else:
+            timeLimit = 180
+        self.recordingTarget = TempRecording(target)
+        self.recordingTimer = reactor.callLater(timeLimit, self.endRecording)
         
     def receivedAudio(self, dialog, bytes):
-        if self.connected and self.recordingTarget:            
+        if self.recordingTarget:            
             self.recordingTarget.write(bytes)
 
-    def receivedDTMF(self, dialog, key):
-        if self.recordingTarget and key == 11:
-            name = self.recordingTarget.filename
-            r = self.endRecording()
-            dialog.playWave(name).addCallback(lambda x: self.chooseSavingOrRecording(r))
+    def playReviewMessage(self, dialog):
+        dialog.playFile(soundFile("vm-review")).addCallback(
+            lambda _: dialog.playFile(soundFile("vm-star-cancel")))
+            
+    class recording(mode):
+        def receivedDTMF(self, dialog, key):
+            if self.recordingTarget and key == 11:
+                self.temprecordingName = self.recordingTarget.filename
+                r = self.endRecording()
+                self.temprecording = r
+                self.playReviewMessage(dialog)
+                self.mode = "review"
 
-    def chooseSavingOrRecording(self, r):
-        #for purposes of demonstration, just save it
-        r.saveTo(self.store)
-    
+    class review(mode):
+        def receivedDTMF(self, dialog, key):
+            #1 - accept
+            #2 - replay
+            #3 - re-record
+            #10 - give up
+            dialog.stopPlaying()
+            if key == 1:
+                 self.temprecording.saveTo(self.avatar.store)
+                 self.temprecording = None
+                 return dialog.playFile(soundFile("auth-thankyou")).addCallback(lambda _: defer.fail(useragent.Hangup()))
+             
+            elif key == 2:
+                return dialog.playWave(self.temprecordingName).addCallback(lambda _: self.playReviewMessage(dialog))
+            elif key == 3:
+                self.mode = "recording"
+                def beginAgain():                    
+                    dialog.playFile(soundFile("beep"))
+                    self.beginRecording()
+                reactor.callLater(0.5, beginAgain)
+            elif key == 10:
+                self.temprecording = None
+                self.endRecording()
+                return dialog.playFile(soundFile("vm-goodbye")).addCallback(lambda _: defer.fail(useragent.Hangup()))
+                                                                     
+                                
     def endRecording(self):        
-        if self.recordingTimer.active():
+        if self.recordingTimer and self.recordingTimer.active():
             self.recordingTimer.cancel()        
         if self.recordingTarget:
             self.recordingTarget.close()
@@ -116,8 +161,9 @@ class ConfessionUser(Item, InstallableMixin):
             return r
         
     def callEnded(self, dialog):
-        self.endRecording()
-        self.connected = False
+        r = self.endRecording()
+        if self.temprecording:
+            self.temprecording.saveTo(self.avatar.store) 
 
 
 class TempRecording:
@@ -184,57 +230,10 @@ class AnonConfessionUser(Item, InstallableMixin):
     schemaVersion = 1
 
     installedOn = reference()
-
-    connected = inmemory()
-    recordingTarget = inmemory()
-    recordingTimer = inmemory()
     
-    def activate(self):
-        #sigh
-        self.connected = False
-        
     def installOn(self, other):
         super(AnonConfessionUser, self).installOn(other)
         other.powerUp(self, useragent.ICallRecipient)
 
-    def acceptCall(self, dialog):
-        if self.connected:
-            raise sip.SIPError(486)
-    
-    def callBegan(self, dialog):
-        self.connected = True
-        self.recordingTarget = None
-        import os
-        f = open(os.path.join(os.path.split(__file__)[0], 'test_audio.raw'))
-        dialog.playFile(f).addCallback(lambda _: self.beginRecording(dialog.remoteAddress[1].toCredString()))
-
-    def beginRecording(self, fromUser):
-        self.recordingTarget = TempRecording(fromUser)
-        self.recordingTimer = reactor.callLater(45, self.endRecording)
-        
-    def receivedAudio(self, dialog, bytes):
-        if self.connected and self.recordingTarget:            
-            self.recordingTarget.write(bytes)
-
-    def receivedDTMF(self, dialog, key):
-        if self.recordingTarget and key == 11:
-            name = self.recordingTarget.filename
-            r = self.endRecording()
-            dialog.playWave(name).addCallback(lambda x: self.chooseSavingOrRecording(r))
-
-    def chooseSavingOrRecording(self, r):
-        #for purposes of demonstration, just save it
-        r.saveTo(self.store)
-    
-    def endRecording(self):        
-        if self.recordingTimer.active():
-            self.recordingTimer.cancel()        
-        if self.recordingTarget:
-            self.recordingTarget.close()
-            r = self.recordingTarget
-            self.recordingTarget = None
-            return r
-        
-    def callEnded(self, dialog):
-        self.endRecording()
-        self.connected = False
+    def buildCallResponder(self, dialog):
+        return ConfessionCall(self, True)

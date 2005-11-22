@@ -86,7 +86,7 @@ class ConfessionCall(object):
     implements(useragent.ICallResponder)
     recordingTarget = None
     recordingTimer = None
-
+    temprecording = None
     def __init__(self, avatar, anon=False):
         self.avatar = avatar
         self.anon=anon

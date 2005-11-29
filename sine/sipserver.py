@@ -135,8 +135,9 @@ class SineBenefactor(Item):
 
     def endow(self, ticket, avatar):
         self.endowed += 1
-        la = avatar.parent.findFirst(userbase.LoginAccount,
-                avatars=avatar.parent.getItemByID(avatar.idInParent))
+        la = avatar.parent.findFirst(
+            userbase.LoginAccount,
+            userbase.LoginAccount.avatars == avatar.parent.getItemByID(avatar.idInParent))
 
         avatar.findOrCreate(website.WebSite).installOn(avatar)
         avatar.findOrCreate(webapp.PrivateApplication).installOn(avatar)

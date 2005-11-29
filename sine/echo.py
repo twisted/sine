@@ -36,12 +36,10 @@ class EchoTest(Item, InstallableMixin):
     schemaVersion = 1
 
     installedOn = reference()
-    connected = inmemory()
 
-    def activate(self):
-        #sigh
-        self.connected = False
-        
+    def buildCallResponder(self, dialog):
+        return self
+    
     def installOn(self, other):
         super(EchoTest, self).installOn(other)
         other.powerUp(self, useragent.ICallRecipient)

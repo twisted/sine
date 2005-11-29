@@ -4,6 +4,7 @@ from twisted import cred
 from twisted.internet import reactor
 from twisted.trial import unittest
 from zope.interface import implements
+from axiom import store, userbase, item, attributes
 
 exampleInvite = """INVITE sip:bob@proxy2.org SIP/2.0\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9\r
@@ -91,8 +92,21 @@ Content-Length: 0\r
 \r
 """
 
+class FakeAvatar(item.Item, item.InstallableMixin):
+    typeName = "fakeavatar"
+    schemaVersion = 1
+    installedOn = attributes.reference()
+    implements(sip.IVoiceSystem)
+    def localElementByName(self, name):
+        return FakeCallRecipient()
+
+    
+    def installOn(self, other):
+        super(FakeAvatar, self).installOn(other)
+        other.powerUp(self, sip.IVoiceSystem)
+        
 class FakeCallRecipient:
-    implements(useragent.ICallRecipient)
+    implements(useragent.ICallRecipient, useragent.ICallResponder)
 
     def acceptCall(self, dialog):
         pass
@@ -107,16 +121,20 @@ class FakeCallRecipient:
     def receivedAudio(self, dialog, bytes):
         pass
 
+    def buildCallResponder(self, dialog):
+        return self
+    
 class CallTerminateTest(FakeClockTestCase):
 
     def setUp(self):
-        r = TestRealm("proxy2.org")
-        r.interface = useragent.ICallRecipient
-        r.users["bob@proxy2.org"] =  FakeCallRecipient()
-        
-        p = cred.portal.Portal(r)
-        p.registerChecker(PermissiveChecker())
-        self.uas = useragent.UserAgentServer(p, "127.0.0.2")
+        self.dbdir = self.mktemp()
+        self.store = store.Store(self.dbdir)
+        self.login = userbase.LoginSystem(store=self.store)
+        self.login.installOn(self.store)
+        account = self.login.addAccount('bob', 'proxy2.org', None)
+        us = account.avatars.open()
+        FakeAvatar(store=us).installOn(us)
+        self.uas = useragent.UserAgentServer(us, "127.0.0.2")
         self.sent = []
         self.sip = sip.SIPTransport(self.uas, ["server.com"], 5060)
         self.sip.sendMessage = lambda dest, msg: self.sent.append((dest, msg))

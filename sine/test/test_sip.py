@@ -125,7 +125,7 @@ class FakeAvatar:
         self.physicalURL = physicalURL
         self.expiry = expiry
         self.realm.regs += 1
-        return self.getRegistrationInfo()
+        return self.getRegistrationInfo("__registrar__")
 
     def unregisterAddress(self, url):
         """Unregister the physical address of a logical URL.
@@ -140,7 +140,7 @@ class FakeAvatar:
 
     unregisterAllAddresses = lambda self: self.unregisterAddress(None)
 
-    def getRegistrationInfo(self):
+    def getRegistrationInfo(self, caller):
         """Get registration info for logical URL.
 
         @return: Deferred of C{Registration} object or failure of SIPLookupError.
@@ -553,7 +553,7 @@ class ProxyTestCase(FakeClockTestCase):
         self.assertEquals(dest, ("foo.com", 5060))
 
     def testCantForwardRequest(self):
-        self.proxy.findTargets = lambda uri: defer.fail(sip.SIPLookupError(604))
+        self.proxy.findTargets = lambda uri, caller: defer.fail(sip.SIPLookupError(604))
         # Make all lookups fail with a 604
         self.sip.datagramReceived(exampleInvite, (testurls["client.com"], 5060))
         self.assertEquals(len(self.sent), 2)
@@ -650,7 +650,7 @@ class RegistrationTestCase(FakeClockTestCase):
         ignoredIface, contact, ignoredLogout = unittest.deferredResult(
             self.proxy.portal.login(Preauthenticated('joe@proxy.com'),
                                     None, sip.IContact))
-        desturl = contact.getRegistrationInfo()[0][0]
+        desturl = contact.getRegistrationInfo("__registrar__")[0][0]
         self.assertEquals((desturl.host, desturl.port), ("client.com", 1234))
 
 
@@ -721,15 +721,16 @@ class RegistrationTestCase(FakeClockTestCase):
         self.realm.permissive = 0
         self.registerGood()
         url = sip.URL(username="joe", host="foo.com")
-        f = unittest.deferredResult(self.proxy.findTargets(url))
+        f = unittest.deferredResult(self.proxy.findTargets(url, None))
         self.assertEquals(f[0], url)
 
     def testNoContactLookup(self):
         self.realm.permissive = 0
         self.registerGood()
         url = sip.URL(username="jane", host="proxy.com")
-        f = unittest.deferredError(self.proxy.findTargets(url))
-        f.trap(sip.SIPLookupError)
+        def e(err):
+            err.trap(sip.SIPLookupError)
+        return self.proxy.findTargets(url, None).addErrback(e)
     testNoContactLookup.todo = "Fix cred to raise NoSuchUser when looking up nonexistent users"
 
     def countRegistrations(self):

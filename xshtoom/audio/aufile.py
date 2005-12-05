@@ -1,4 +1,5 @@
-import wave, sunau, aifc, sndhdr, gsm
+import wave, sunau, aifc, sndhdr
+
 from audioop import tomono, lin2lin, ulaw2lin, ratecv
 
 import struct
@@ -120,18 +121,22 @@ def getWriter(filename):
         raise ValueError("only know .au/.wav files, not %s"%(filename))
     return audio
 
-class GSMReader:
+try:
+    import gsm
+except ImportError:
+    GSMReader = None
+else:
+    class GSMReader:
+        def __init__(self, f):
+            self.file = f
+            self.gsm = gsm.gsm(big_endian)
+        def read(self, samples):
+            data = self.file.read(33)
+            if data:
+                return self.gsm.decode(data)
+            else:
+                return ''
 
-    def __init__(self, f):
-        self.file = f
-        self.gsm = gsm.gsm(big_endian)
-    def read(self, samples):
-        data = self.file.read(33)
-        if data:
-            return self.gsm.decode(data)
-        else:
-            return ''
-    
 # For testing porpoises
 def getdev():
     import ossaudiodev

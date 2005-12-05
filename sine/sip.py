@@ -429,10 +429,16 @@ def parseAddress(address, host=None, port=None, clean=0):
         log.err()
         raise SIPError(400)
 
-def formatAddress(threetuple):
+def formatAddress(address):
     """ Format a ('display name', URL, {params}) correctly.
     """
-    display, uri, params = threetuple
+    if isinstance(address, URL):
+        #sigh. so sloppy! but better than formatting without the <>s
+        display = ""
+        uri = address
+        params = {}
+    else:
+        display, uri, params = address
     params = ';'.join(['='.join(x) for x in params.items()])
     if params:
         params = ';'+params
@@ -1477,6 +1483,7 @@ class SIPTransport(protocol.DatagramProtocol):
                         else:
                             id = m.code
                         debug("Received %r from %r." % (id, addr))
+                        debug("Client transactions: %r" % (self.clientTransactions,))
                     if isinstance(m, Request):
                         self._fixupNAT(m, addr)
                         self.handle_request(m, addr)
@@ -1555,7 +1562,7 @@ class SIPTransport(protocol.DatagramProtocol):
         if ct and msg.headers['cseq'][0].split(' ')[1] == ct.request.headers['cseq'][0].split(' ')[1]:
             ct.messageReceived(msg)
         else:
-            self.tu.responseReceived(msg)
+            self.tu.responseReceived(msg, None)
 
 
     def sendRequest(self, msg, target):
@@ -1636,8 +1643,33 @@ responsePriorities = {                  428: 24, 429: 24, 494: 24,
     580: 22,                            483: 41, 482: 41,
     485: 23,                            408: 49}
 
+class SIPResolverMixin:
 
-class Proxy:
+    def _lookupURI(self, userURI):
+        #RFC 3263 4.2
+        if abstract.isIPAddress(userURI.host):
+            # it is an IP not a hostname
+            if not userURI.port:
+                userURI.port = 5060
+            return defer.succeed([(userURI.host, userURI.port)])
+        else:
+            if userURI.port is not None:
+                return defer.succeed([(userURI.host, userURI.port)])
+            d = client.lookupService('_sip._udp.' + userURI.host)
+            d.addCallback(self._resolveSRV, userURI)
+            return d
+
+    def _resolveSRV(self, (answers, _, __), userURI):
+
+        if answers:
+            answers = [(a.payload.priority, str(a.payload.target), a.payload.port) for a in answers]
+            answers.sort()
+            return [(answer[1], answer[2]) for answer in answers]
+        else:
+            #just do an A lookup
+            return [(userURI.host, 5060)]
+
+class Proxy(SIPResolverMixin):
     implements(ITransactionUser)
 
     def __init__(self, portal):
@@ -1791,31 +1823,6 @@ class Proxy:
 
             self.responseContexts[ct] = (st, timerC)
             self.responseContexts.setdefault(st, []).append(ct)
-    def _lookupURI(self, userURI):
-        """Leave this method: it is hooked by the tests.
-        """
-        #RFC 3263 4.2
-        if abstract.isIPAddress(userURI.host):
-            # it is an IP not a hostname
-            if not userURI.port:
-                userURI.port = 5060
-            return defer.succeed([(userURI.host, userURI.port)])
-        else:
-            if userURI.port is not None:
-                return defer.succeed([(userURI.host, userURI.port)])
-            d = client.lookupService('_sip._udp.' + userURI.host)
-            d.addCallback(self._resolveSRV, userURI)
-            return d
-
-    def _resolveSRV(self, (answers, _, __), userURI):
-
-        if answers:
-            answers = [(a.payload.priority, str(a.payload.target), a.payload.port) for a in answers]
-            answers.sort()
-            return [(answer[1], answer[2]) for answer in answers]
-        else:
-            #just do an A lookup
-            return [(userURI.host, 5060)]
 
     def checkInviteAuthorization(self, message):
         name, uri, tags = parseAddress(message.headers["to"][0], clean=1)

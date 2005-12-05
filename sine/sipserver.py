@@ -9,7 +9,7 @@ from axiom.attributes import integer, inmemory, bytes, text, reference, timestam
 from axiom.item import Item, InstallableMixin
 from axiom.slotmachine import hyper as super
 from epsilon.extime import Time
-from sine import sip 
+from sine import sip
 from xmantissa import ixmantissa, website, webapp, webnav
 from zope.interface import implements
 from axiom.errors import NoSuchUser

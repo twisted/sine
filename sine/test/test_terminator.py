@@ -106,7 +106,7 @@ class FakeAvatar(item.Item, item.InstallableMixin):
         other.powerUp(self, sip.IVoiceSystem)
         
 class FakeCallRecipient:
-    implements(useragent.ICallRecipient, useragent.ICallResponder)
+    implements(useragent.ICallControllerFactory, useragent.ICallController)
 
     def acceptCall(self, dialog):
         pass
@@ -121,9 +121,9 @@ class FakeCallRecipient:
     def receivedAudio(self, dialog, bytes):
         pass
 
-    def buildCallResponder(self, dialog):
+    def buildCallController(self, dialog):
         return self
-    
+ 
 class CallTerminateTest(FakeClockTestCase):
 
     def setUp(self):

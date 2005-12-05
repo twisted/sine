@@ -27,7 +27,7 @@ class ConfessionBenefactor(Item):
     endowed = integer(default = 0)
 
     localHost = bytes()
-    
+
     def endow(self, ticket, avatar):
         self.endowed += 1
 
@@ -35,7 +35,7 @@ class ConfessionBenefactor(Item):
         avatar.findOrCreate(webapp.PrivateApplication).installOn(avatar)
         avatar.findOrCreate(ConfessionUser).installOn(avatar)
         avatar.findOrCreate(ConfessionDispatcher, localHost=self.localHost).installOn(avatar)
-        
+
 class ConfessionDispatcher(Item, InstallableMixin):
     implements(sip.IVoiceSystem)
     typeName = "sine_confession_dispatcher"
@@ -44,13 +44,13 @@ class ConfessionDispatcher(Item, InstallableMixin):
     installedOn = reference()
     localHost = bytes()
     uas = inmemory()
-    
+
     def installOn(self, other):
         super(ConfessionDispatcher, self).installOn(other)
         other.powerUp(self, sip.IVoiceSystem)
     def activate(self):
         self.uas = useragent.UserAgentServer(self.store, self.localHost)
-        
+
     def lookupProcessor(self, msg, dialogs):
         #XXX haaaaack
         if 'confession@' in msg.headers['to'][0]:
@@ -60,38 +60,38 @@ class ConfessionDispatcher(Item, InstallableMixin):
 
     def localElementByName(self, name):
         if name == 'confession':
-            return useragent.ICallRecipient(self.store)
+            return useragent.ICallControllerFactory(self.store)
         else:
             raise sip.SIPLookupError(404)
-        
+
 class ConfessionUser(Item, InstallableMixin):
-    implements(useragent.ICallRecipient)
+    implements(useragent.ICallControllerFactory)
 
     typeName = "sine_confession_user"
     schemaVersion = 1
 
     installedOn = reference()
-    
+
     def installOn(self, other):
         super(ConfessionUser, self).installOn(other)
-        other.powerUp(self, useragent.ICallRecipient)
+        other.powerUp(self, useragent.ICallControllerFactory)
 
-    def buildCallResponder(self, dialog):
+    def buildCallController(self, dialog):
         return ConfessionCall(self)
 
 class ConfessionCall(object):
     __metaclass__ = ModalType
     initialMode = 'recording'
     modeAttribute = 'mode'
-    implements(useragent.ICallResponder)
+    implements(useragent.ICallController)
     recordingTarget = None
     recordingTimer = None
     temprecording = None
     def __init__(self, avatar, anon=False):
         self.avatar = avatar
         self.anon=anon
-        
-    def callBegan(self, dialog):        
+
+    def callBegan(self, dialog):
         def playBeep(_):
             dialog.playFile(soundFile("beep"))
         d = dialog.playFile(soundFile("vm-intro")).addCallback(playBeep)
@@ -107,15 +107,15 @@ class ConfessionCall(object):
             timeLimit = 180
         self.recordingTarget = TempRecording(target)
         self.recordingTimer = reactor.callLater(timeLimit, self.endRecording)
-        
+
     def receivedAudio(self, dialog, bytes):
-        if self.recordingTarget:            
+        if self.recordingTarget:
             self.recordingTarget.write(bytes)
 
     def playReviewMessage(self, dialog):
         dialog.playFile(soundFile("vm-review")).addCallback(
             lambda _: dialog.playFile(soundFile("vm-star-cancel")))
-            
+
     class recording(mode):
         def receivedDTMF(self, dialog, key):
             if self.recordingTarget and key == 11:
@@ -136,12 +136,12 @@ class ConfessionCall(object):
                  self.temprecording.saveTo(self.avatar.store)
                  self.temprecording = None
                  return dialog.playFile(soundFile("auth-thankyou")).addCallback(lambda _: defer.fail(useragent.Hangup()))
-             
+
             elif key == 2:
                 return dialog.playWave(self.temprecordingName).addCallback(lambda _: self.playReviewMessage(dialog))
             elif key == 3:
                 self.mode = "recording"
-                def beginAgain():                    
+                def beginAgain():
                     dialog.playFile(soundFile("beep"))
                     self.beginRecording()
                 reactor.callLater(0.5, beginAgain)
@@ -149,21 +149,21 @@ class ConfessionCall(object):
                 self.temprecording = None
                 self.endRecording()
                 return dialog.playFile(soundFile("vm-goodbye")).addCallback(lambda _: defer.fail(useragent.Hangup()))
-                                                                     
-                                
-    def endRecording(self):        
+
+
+    def endRecording(self):
         if self.recordingTimer and self.recordingTimer.active():
-            self.recordingTimer.cancel()        
+            self.recordingTimer.cancel()
         if self.recordingTarget:
             self.recordingTarget.close()
             r = self.recordingTarget
             self.recordingTarget = None
             return r
-        
+
     def callEnded(self, dialog):
         r = self.endRecording()
         if self.temprecording:
-            self.temprecording.saveTo(self.avatar.store) 
+            self.temprecording.saveTo(self.avatar.store)
 
 
 class TempRecording:
@@ -172,14 +172,14 @@ class TempRecording:
         fileno, self.filename = tempfile.mkstemp()
         self.file = wave.open(os.fdopen(fileno, 'wb'), 'wb')
         self.file.setparams((1,2,8000,0,'NONE','NONE'))
-        self.fromAddress = fromAddress        
-        
+        self.fromAddress = fromAddress
+
     def write(self, bytes):
         self.file.writeframes(bytes)
 
     def close(self):
         self.file.close()
-        
+
     def saveTo(self, store):
         r = Recording(store=store, fromAddress=unicode(self.fromAddress))
         r.audioFromFile(self.filename)
@@ -193,7 +193,7 @@ class Recording(Item, website.PrefixURLMixin):
     prefixURL = text()
     length = integer() #seconds in recording
     fromAddress = text()
-    
+
     def __init__(self, **args):
         super(Recording, self).__init__(**args)
 
@@ -206,10 +206,10 @@ class Recording(Item, website.PrefixURLMixin):
         if not dir.exists():
             dir.makedirs() #should i really have to do this?
         return dir.child("%s.wav" % self.storeID)
-        
+
     file = property(getFile)
-    
-    def audioFromFile(self, filename):        
+
+    def audioFromFile(self, filename):
         f = self.file.path
         import shutil
         #don't hate me, exarkun
@@ -220,20 +220,20 @@ class Recording(Item, website.PrefixURLMixin):
 
     def createResource(self):
         return static.Data(self.file, 'audio/x-wav')
-    
-        
+
+
 
 class AnonConfessionUser(Item, InstallableMixin):
-    implements(useragent.ICallRecipient)
+    implements(useragent.ICallControllerFactory)
 
     typeName = "sine_anonconfession_user"
     schemaVersion = 1
 
     installedOn = reference()
-    
+
     def installOn(self, other):
         super(AnonConfessionUser, self).installOn(other)
-        other.powerUp(self, useragent.ICallRecipient)
+        other.powerUp(self, useragent.ICallControllerFactory)
 
-    def buildCallResponder(self, dialog):
+    def buildCallController(self, dialog):
         return ConfessionCall(self, True)

@@ -12,38 +12,25 @@ class EchoDispatcher(Item, InstallableMixin):
     installedOn = reference()
     localHost = bytes()
     uas = inmemory()
-    
+
     def installOn(self, other):
         super(EchoDispatcher, self).installOn(other)
         other.powerUp(self, sip.IVoiceSystem)
     def activate(self):
         self.uas = useragent.UserAgentServer(self.store, self.localHost)
-        
+
     def lookupProcessor(self, msg, dialogs):
         self.uas.dialogs = dialogs
         return self.uas
 
     def localElementByName(self, name):
         if name == 'echo':
-            return useragent.ICallRecipient(self.store)
+            return useragent.ICallController(self.store)
         else:
             raise sip.SIPLookupError(404)
 
-class EchoTest(Item, InstallableMixin):
-    implements(useragent.ICallRecipient)
-
-    typeName = "sine_echo_test"
-    schemaVersion = 1
-
-    installedOn = reference()
-
-    def buildCallResponder(self, dialog):
-        return self
-    
-    def installOn(self, other):
-        super(EchoTest, self).installOn(other)
-        other.powerUp(self, useragent.ICallRecipient)
-
+class Echoer:
+    implements(useragent.ICallController)
     def acceptCall(self, dialog):
         return True
 
@@ -62,7 +49,21 @@ class EchoTest(Item, InstallableMixin):
     def receivedDTMF(self, dialog, key):
         if key == 11:
             raise useragent.Hangup()
-        
+
     def callEnded(self, dialog):
         pass
-    
+
+class EchoTest(Item, InstallableMixin, Echoer):
+    implements(useragent.ICallControllerFactory)
+
+    typeName = "sine_echo_test"
+    schemaVersion = 1
+
+    installedOn = reference()
+
+    def buildCallController(self, dialog):
+        return self
+
+    def installOn(self, other):
+        super(EchoTest, self).installOn(other)
+        other.powerUp(self, useragent.ICallControllerFactory)

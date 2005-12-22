@@ -86,8 +86,13 @@ def parse_c(obj, c, text):
     (obj.nettype, obj.addrfamily, obj.ipaddr) = words
 
 def unparse_c(obj, c):
-    return ['%s %s %s' % (obj.nettype, obj.addrfamily, obj.ipaddr)]
-
+    mds = getattr(obj, "mediaDescriptions", None)
+    if mds and not [x for x in mds if not x.ipaddr]: #if every MediaDescription has an IP...
+        return []
+    if obj.ipaddr:
+        return ['%s %s %s' % (obj.nettype, obj.addrfamily, obj.ipaddr)]
+    else:
+        return []
 def parse_m(obj, m, value):
     if value:
         els = value.split()
@@ -118,7 +123,7 @@ parsers = [
 mdparsers = [
     ('m', 0, parse_m, unparse_m),
     ('i', 0, parse_generic, unparse_generic),
-    ('c', 0, parse_generic, unparse_generic),
+    ('c', 0, parse_c, unparse_c),
     ('b', 0, parse_generic, unparse_generic),
     ('k', 0, parse_generic, unparse_generic),
     ('a', 0, parse_a, unparse_a)
@@ -227,7 +232,7 @@ class SDP:
         self._a = OrderedDict()
         self.mediaDescriptions = []
         # XXX Use the username preference
-        self._o_username = 'root'
+        self._o_username = '-'
         self._o_sessid = self._o_version = str(int(time()%1000 * 100))
         self._o_nettype = self.nettype = 'IN'
         self._o_addrfamily = self.addrfamily = 'IP4'

@@ -18,7 +18,6 @@ from twisted.protocols import basic
 from zope.interface import  Interface, implements
 
 from axiom.userbase  import Preauthenticated
-from axiom.errors import NoSuchUser
 
 from epsilon.modal import mode, ModalType
 
@@ -1556,7 +1555,6 @@ class SIPTransport(protocol.DatagramProtocol):
         if not (via.host in self.hosts and via.port == self.port):
             #drop silently
             return
-
         #RFC 3261 17.1.3
         ct = self.clientTransactions.get(via.branch)
         if ct and msg.headers['cseq'][0].split(' ')[1] == ct.request.headers['cseq'][0].split(' ')[1]:
@@ -1607,26 +1605,65 @@ class SIPTransport(protocol.DatagramProtocol):
         self.transport.write(msg.toString(), (host, port))
 
     def _resolveA(self, addr):
-            return reactor.resolve(addr)
+        return reactor.resolve(addr)
 
 
 class ITransactionUser(Interface):
+    """
+    Providers of this interface fill the 'Transaction User' role
+    described in RFC3261.  From section 5:
+
+        The layer above the transaction layer is called the
+        transaction user (TU).  Each of the SIP entities, except the
+        stateless proxy, is a transaction user.  When a TU wishes to
+        send a request, it creates a client transaction instance and
+        passes it the request along with the destination IP address,
+        port, and transport to which to send the request.  A TU that
+        creates a client transaction can also cancel it.  When a
+        client cancels a transaction, it requests that the server stop
+        further processing, revert to the state that existed before
+        the transaction was initiated, and generate a specific error
+        response to that transaction.  This is done with a CANCEL
+        request, which constitutes its own transaction, but references
+        the transaction to be cancelled (Section 9).
+
+    """
+
     def start(transport):
-        """Connects the transport to the TU."""
+        """Connects the transport to the TU.
+
+        @param transport: a SIPTransport instance.
+        """
 
     def requestReceived(msg, addr):
         """Processes a message, after the transport and transaction
         layer are finished with it. May return a ServerTransaction (or
         ServerInviteTransaction), which will handle subsequent
-        messages from that SIP transaction."""
+        messages from that SIP transaction.
+
+        @param msg: a sip.Message instance
+        @param addr: a C{(host, port)} tuple
+        """
 
     def responseReceived(msg, ct=None):
         """Processes a response received from the transport, along
-        with the client transaction it is a part of, if any."""
+        with the client transaction it is a part of, if any.
+
+        @param msg: a sip.Message instance
+
+        @param ct: a ClientTransaction or ClientInviteTransaction
+        instance that represents the SIP transaction the given message
+        is a part of.
+        """
 
     def clientTransactionTerminated(ct):
         """Called when a client transaction created by this TU
-        transitions to the 'terminated' state."""
+        transitions to the 'terminated' state.
+
+        @param ct: a ClientTransaction or ClientInviteTransaction
+        instance that has been terminated, either by a timeout or by a
+        message separately sent to L{responseReceived}.
+        """
 
 #from resiprocate's proxy
 responsePriorities = {                  428: 24, 429: 24, 494: 24,
@@ -1748,7 +1785,7 @@ class Proxy(SIPResolverMixin):
                                             branch=computeBranch(msg)).toString())
             self.proxyRequestStatelessly(msg)
             return None
-        else:
+        else:            
             st = ServerTransaction(self.transport, self, msg, addr)
             _cb(None, st)
 
@@ -1998,9 +2035,8 @@ class Proxy(SIPResolverMixin):
         st.messageReceivedFromTU(msg)
 
     def processLocalResponse(self, msg, ct):
-        if getattr(self.originator, None):
-            self.originator.responseReceived(msg, ct)
-
+        debug("Unhandled local SIP message: %s" % (msg,))
+        
     def cancelPendingClients(self, st):
         if isinstance(st, ServerInviteTransaction):
             cts = self.responseContexts.get(st, [])
@@ -2163,7 +2199,10 @@ class IVoiceSystem(Interface):
     """
 
     def lookupProcessor(self, msg):
-        """Returns an ITransactionUser or None"""
+        """
+        Returns an ITransactionUser or None.
+        Can raise SIPError with a SIP error code to reject a request.
+        """
 
     def localElementByName(self, name):
         """returns an ICallRecipient that can handle calls to this name"""
@@ -2176,7 +2215,20 @@ class SIPDispatcher:
     """
     implements(ITransactionUser)
     def __init__(self, portal, default):
-        self.cts = {}
+        """
+        Create a SIP dispatcher.
+
+        @param portal: an IPortal provider, which wraps a cred Realm
+        that has avatars that can be looked up via the L{IVoiceSystem}
+        interface.
+
+        @param default: an ITransactionUser (generally a SIP Proxy) to
+        be used in the event that a message cannot be dispatched via
+        the C{portal} argument.
+        """
+        self.clientTransactions = {}
+        self.temporaryProcessors = {}   # map sip.URL.toCredString() to
+                                        # ITransactionUser providers
         self.default = default
         self.portal = portal
         self.dialogs = {}
@@ -2185,27 +2237,71 @@ class SIPDispatcher:
         self.transport = transport
         self.default.start(transport)
 
+    def errorMessage(self, err, msg, addr):
+        err.trap(SIPError)
+        errcode = err.value.code
+        if msg.method == 'INVITE':
+            st = ServerInviteTransaction(self.transport, self, msg, addr)
+        else:
+            st = ServerTransaction(self.transport, self, msg, addr)
+        st.messageReceivedFromTU(responseFromRequest(errcode, msg))
+        return st
+        
     def requestReceived(self, msg, addr):
-        self.lookupProcessor(msg).addCallback(lambda p: p.requestReceived(msg, addr))
+        """
+        Implements L{ITransactionUser.requestReceived}.
+        """
+        from sine.useragent import matchRequestToDialog
+        dialog = matchRequestToDialog(msg, self.dialogs)
+        if dialog:
+            #XXX needs error handling
+            dialog.tu.requestReceived(msg, addr)
+        else:            
+            return self.lookupProcessor(msg).addCallback(
+                lambda p: p.requestReceived(msg, addr)
+                ).addErrback(self.errorMessage,msg, addr)
 
     def responseReceived(self, msg, ct=None):
         def recv(processor):
+            if not processor:
+                # nobody wanted to handle this response, silently drop it!
+                debug("No processor for: %s" % (msg,))
+                return
             if ct:
-                self.cts[ct] = processor
+                self.clientTransactions[ct] = processor
             processor.responseReceived(msg, ct)
-        self.lookupProcessor(msg).addCallback(recv)
+
+        from sine.useragent import matchResponseToDialog
+        dialog = matchResponseToDialog(msg, self.dialogs)
+        if dialog:
+            recv(dialog.tu)
+        else:
+            self.lookupProcessor(msg).addCallback(recv)
 
     def clientTransactionTerminated(self, ct):
-        self.cts[ct].clientTransactionTerminated(ct)
-        del self.cts[ct]
+        self.clientTransactions[ct].clientTransactionTerminated(ct)
+        del self.clientTransactions[ct]
 
+    def installTemporaryProcessor(self, uri, processor):
+        self.temporaryProcessors[uri] = processor
+        
     def lookupProcessor(self, msg):
+        """
+        Return a Deferred which fires an ITransactionUser provider
+        which should handle the given Message, or None, if no
+        appropriate transaction user can be looked up.
+        """
         fromURL = parseAddress(msg.headers['from'][0])[1]
-
+        toURL = parseAddress(msg.headers['to'][0])[1]
         def noSuchUser(err):
-            err.trap(UnauthorizedLogin, NoSuchUser)
-            toURL = parseAddress(msg.headers['to'][0])[1]
-            return self.portal.login(Preauthenticated(toURL.toCredString()), None, IVoiceSystem).addErrback(lambda e: None)
+            err.trap(UnauthorizedLogin)
+            # This call is not coming from anyone we know; let's see
+            # if it's going *to* anyone we know.
+            def _handleBogusLogin(innerErr):
+                innerErr.trap(UnauthorizedLogin)
+            return self.portal.login(
+                Preauthenticated(toURL.toCredString()), None, IVoiceSystem
+                ).addErrback(_handleBogusLogin)
 
         def gotProcessor(proc):
             if proc is None:
@@ -2213,14 +2309,30 @@ class SIPDispatcher:
             return proc
 
         def gotVoiceSystem(x):
-
             if x is None:
+                # no such user, punt
                 return self.default
             (i, vs, l) = x
             p = vs.lookupProcessor(msg, self.dialogs)
+            if p is None:
+                # if the voicesystem did not want to handle this
+                # request, we hand off to the default
+                debug("woop no handler for %s,%s" % (fromURL, toURL))
+                return self.default
             p.transport = self.transport
             return p
-
+        ## These may be useful for something but not 3PCC
+        
+        #if fromURL in self.temporaryProcessors:
+        #    return defer.succeed(self.temporaryProcessors[fromURL])
+        #if toURL in self.temporaryProcessors:
+        #    return defer.succeed(self.temporaryProcessors[toURL])
+        
         return self.portal.login(
-            Preauthenticated(fromURL.toCredString()),
-            None, IVoiceSystem).addErrback(noSuchUser).addCallback(gotVoiceSystem).addCallback(gotProcessor)
+            Preauthenticated(fromURL.toCredString()), None, IVoiceSystem
+            ).addErrback(
+            noSuchUser
+            ).addCallback(
+            gotVoiceSystem
+            ).addCallback(
+            gotProcessor)

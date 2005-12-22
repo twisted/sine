@@ -49,7 +49,7 @@ class ConfessionDispatcher(Item, InstallableMixin):
         super(ConfessionDispatcher, self).installOn(other)
         other.powerUp(self, sip.IVoiceSystem)
     def activate(self):
-        self.uas = useragent.UserAgentServer(self.store, self.localHost)
+        self.uas = useragent.UserAgent.server(self, self.localHost)
 
     def lookupProcessor(self, msg, dialogs):
         #XXX haaaaack

@@ -9,7 +9,7 @@ from axiom.attributes import integer, inmemory, bytes, text, reference, timestam
 from axiom.item import Item, InstallableMixin
 from axiom.slotmachine import hyper as super
 from epsilon.extime import Time
-from sine import sip
+from sine import sip, useragent, tpcc
 from xmantissa import ixmantissa, website, webapp, webnav
 from zope.interface import implements
 from axiom.errors import NoSuchUser
@@ -267,8 +267,41 @@ class SIPDispatcherService(Item, Service):
         self.proxy = sip.Proxy(portal)
         self.dispatcher = sip.SIPDispatcher(portal, self.proxy)
         f = sip.SIPTransport(self.dispatcher, self.hostnames.split(','), self.portno)
-
+        
         self.port = reactor.listenUDP(self.portno, f)
+
+    def setupCallBetween(self, partyA, partyB):
+        """
+        Set up a call between party A and party B, and control the
+        signalling for the call.  Either URL may refer to any SIP
+        address, there is no requirement that either participant be
+        registered with this proxy.
+
+        @param partyA: a SIP address (a three-tuple of (name, URL,
+        parameters)) that represents the party initiating the call,
+        i.e. the SIP address of the user who is logged in to the web
+        UI and pushing the button to place the call. (Specifically,
+        this is the user who will be called first and will have to
+        wait for the other user to pick up the call.)
+
+        @param partyB: a SIP address that represents the party receiving
+        the call.
+
+        @return: None
+        """
+        # XXX TODO should probably return a deferred which
+        # fires... something... that would let us take advantage of
+        # the intermediary call signalling, such as ending the call
+        # early...
+        localpart = "clicktocall"
+        host = self.hostnames.split(',')[0]
+        controller = tpcc.ThirdPartyCallController(self.dispatcher, localpart, host, partyA[0], partyB[1])
+        uac = useragent.UserAgent.client(controller, localpart, host, self.dispatcher.dialogs) 
+        uac.transport = self.dispatcher.transport
+        self.dispatcher.installTemporaryProcessor(sip.URL(host, localpart), uac)
+        
+        uac.call(partyA[1])
+        
 
 class Call(Item):
     typeName = "sine_call"

@@ -232,9 +232,9 @@ class RTPProtocol(DatagramProtocol):
                 d.callback(self.cookie)
 
     def connectionRefused(self):
-        log.err("RTP got a connection refused, ending call")
-        self.Done = True
-        self.app.dropCall(self.cookie)
+        log.err("RTP got a connection refused, continuing anyway")
+        #self.Done = True
+        #self.app.dropCall(self.cookie)
 
     def whenDone(self, cbDone):
         self._cbDone = cbDone

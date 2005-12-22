@@ -17,7 +17,7 @@ class EchoDispatcher(Item, InstallableMixin):
         super(EchoDispatcher, self).installOn(other)
         other.powerUp(self, sip.IVoiceSystem)
     def activate(self):
-        self.uas = useragent.UserAgentServer(self.store, self.localHost)
+        self.uas = useragent.UserAgent.server(self, self.localHost)
 
     def lookupProcessor(self, msg, dialogs):
         self.uas.dialogs = dialogs
@@ -25,7 +25,7 @@ class EchoDispatcher(Item, InstallableMixin):
 
     def localElementByName(self, name):
         if name == 'echo':
-            return useragent.ICallController(self.store)
+            return useragent.ICallControllerFactory(self.store)
         else:
             raise sip.SIPLookupError(404)
 
@@ -52,9 +52,10 @@ class Echoer:
 
     def callEnded(self, dialog):
         pass
-
+    def callFailed(self, dialog, msg):
+        pass
 class EchoTest(Item, InstallableMixin, Echoer):
-    implements(useragent.ICallControllerFactory)
+    implements(useragent.ICallControllerFactory, useragent.ICallController)
 
     typeName = "sine_echo_test"
     schemaVersion = 1

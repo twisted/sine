@@ -2,7 +2,7 @@ from twisted.application import service, internet
 from twisted.internet import reactor
 from sine import sip, useragent, echo
 e = echo.Echoer()
-uac = useragent.UserAgentClient(e, "echo", "faraday.divmod.com")
+uac = useragent.UserAgent.client(e, "echo", "faraday.divmod.com")
 f = sip.SIPTransport(uac, ["faraday.divmod.com"], 5060)
 
 uac.call(sip.parseURL("sip:washort@divmod.com"))

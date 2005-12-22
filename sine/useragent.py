@@ -1,12 +1,11 @@
 from xshtoom.sdp import SDP
 from xshtoom.rtp.protocol import RTPProtocol
-from xshtoom.rtp.formats import SDPGenerator
 from xshtoom.audio.converters import Codecker, PT_PCMU
 from xshtoom.audio.aufile import WavReader
 from sine.sip import responseFromRequest, parseAddress, formatAddress
-from sine.sip import Response, Request, URL, T1, T2, SIPError, Via
+from sine.sip import Response, Request, URL, T1, T2, SIPError, Via, debug
 from sine.sip import ClientTransaction, ServerTransaction, SIPLookupError
-from sine.sip import IVoiceSystem, ITransactionUser, SIPResolverMixin
+from sine.sip import ITransactionUser, SIPResolverMixin, ServerInviteTransaction
 from sine.sip import ClientInviteTransaction, computeBranch
 from twisted.internet import reactor, defer, task
 from twisted.cred.error import UnauthorizedLogin
@@ -52,11 +51,12 @@ class Dialog:
         self.localAddress[2]['tag'] = self.genTag()
         self.direction = "server"
         self.routeSet = [parseAddress(route) for route in self.msg.headers.get('record-route', [])]
+        self.clientState = "confirmed"
         return self.rtp.createRTPSocket(contactURI.host, False).addCallback(lambda _: self)
 
     forServer = classmethod(forServer)
 
-    def forClient(cls, tu, contactURI, targetURI, controller):
+    def forClient(cls, tu, contactURI, targetURI, controller, noSDP=False, fromName=""):
         """
         Create a dialog with a remote party by sending an INVITE.
 
@@ -73,42 +73,15 @@ class Dialog:
         #and specifically, that you can RTP-listen on contactURI.host
 
         # RFC 3261 12.1.2
-        
+
         self = cls(tu, contactURI)
         self.callController = controller
         self.direction = "client"
-        return self._generateInvite(contactURI, targetURI)
+        return self._generateInvite(contactURI, fromName, targetURI, noSDP)
 
     forClient = classmethod(forClient)
-
-    def _generateInvite(self, contacturi, uri):
-        #RFC 3261 8.1.1
-        #RFC 3261 13.2.1
-        invite = Request("INVITE", uri)
-        invite.addHeader("to", formatAddress(uri))
-        invite.addHeader("from", formatAddress(("", URL(contacturi.host, contacturi.username), {'tag': self.genTag()})))
-        invite.addHeader("call-id",
-                         "%s@%s" % (md5.md5(str(random.random())).hexdigest(),
-                                    contacturi.host))
-        invite.addHeader("cseq", "%s INVITE" % self.localCSeq)
-        invite.addHeader("user-agent", "Divmod Sine")
-        invite.addHeader("content-type", "application/sdp")
-        #XXX maybe rip off IP discovered in SDP phase?
-        invite.addHeader("contact", formatAddress(contacturi))
-        def finishMessage(_):
-            sdp = self.rtp.getSDP().show()
-            invite.body = sdp
-            invite.addHeader("content-length", len(sdp))
-            invite.creationFinished()
-            self.msg = invite
-            toAddress,fromAddress = self._finishInit()
-            self.localAddress = fromAddress
-            self.remoteAddress = toAddress
-
-            return self
-        return self.rtp.createRTPSocket(contacturi.host, True).addCallback(finishMessage)
-
-
+    routeSet = None
+    
     def __init__(self, tu, contactURI):
         self.tu = tu
         self.contactURI = contactURI
@@ -119,7 +92,7 @@ class Dialog:
         self.LC = None
         #UAC bits
         self.clientState = "early"
-
+        self.sessionDescription = None
     def _finishInit(self):
         self.callID = self.msg.headers['call-id'][0]
         toAddress = parseAddress(self.msg.headers['to'][0])
@@ -137,7 +110,7 @@ class Dialog:
         return tag
 
     def responseFromRequest(self, code, msg, body, bodyType="application/sdp"):
-        
+
         response = Response(code)
         for name in ("via", "call-id", "record-route", "cseq"):
            response.headers[name] = msg.headers.get(name, [])[:]
@@ -158,6 +131,83 @@ class Dialog:
         response.creationFinished()
         return response
 
+    def _generateInvite(self, contacturi, fromName, uri, noSDP):
+        #RFC 3261 8.1.1
+        #RFC 3261 13.2.1
+        invite = Request("INVITE", uri)
+        invite.addHeader("to", formatAddress(uri))
+        invite.addHeader("from", formatAddress((fromName, URL(contacturi.host, contacturi.username), {'tag': self.genTag()})))
+        invite.addHeader("call-id",
+                         "%s@%s" % (md5.md5(str(random.random())).hexdigest(),
+                                    contacturi.host))
+        invite.addHeader("cseq", "%s INVITE" % self.localCSeq)
+        invite.addHeader("user-agent", "Divmod Sine")
+        if noSDP:
+            invite.headers["content-length"] =  ["0"]
+        else:
+            invite.addHeader("content-type", "application/sdp")
+        #XXX maybe rip off IP discovered in SDP phase?
+        invite.addHeader("contact", formatAddress(contacturi))
+        def fillSDP(_):
+            sdp = self.rtp.getSDP().show()
+            self.sessionDescription = sdp
+            invite.body = sdp
+            invite.headers['content-length'] = [str(len(sdp))]
+            invite.creationFinished()
+        def finish(_):
+            self.msg = invite
+            toAddress,fromAddress = self._finishInit()
+            self.localAddress = fromAddress
+            self.remoteAddress = toAddress
+            return self
+
+        d = self.rtp.createRTPSocket(contacturi.host, True)
+        if noSDP:
+            invite.creationFinished()
+            return d.addCallback(finish)
+        else:
+            return d.addCallback(fillSDP).addCallback(finish)
+
+    def reinvite(self, newContact, newSDP):
+        """
+        Send a new INVITE to the remote address for this dialog.
+        @param newContact: a new local address for this dialog. if None, the existing one is used.
+        @param newSDP: An L{xshtoom.sdp.SDP} instance describing the new session.
+        """
+        newSDP = upgradeSDP(self.sessionDescription, newSDP)
+        msg = self.generateRequest('INVITE')
+        if newContact:
+            msg.headers['contact'] = [formatAddress(newContact)]
+        msg.body = newSDP.show()
+        msg.headers['content-length'] = [str(len(newSDP.show()))]
+        msg.addHeader("content-type", "application/sdp")
+        
+        self.reinviteMsg = msg
+        self.reinviteSDP = newSDP
+        for ct in self.tu.cts:
+            if (isinstance(ct, ClientInviteTransaction) and
+                ct.mode not in ('completed', 'terminated')):
+                self.clientState = "reinvite-waiting"
+                return
+        for st in self.tu.transport.serverTransactions.values():
+            if (st.tu == self.tu and
+                st.mode not in ('confirmed', 'terminated')):
+                self.clientState = "reinvite-waiting"
+                #XXX gotta do something to trigger the reinvite once the
+                #offending ST finishes
+                return
+        return self._sendReinvite(msg)
+
+    def _sendReinvite(self, msg):
+        if self.clientState == "byeSent":
+            #it's over, never mind
+            return
+        dest = self._findDest(msg)
+        ct = ClientInviteTransaction(self.tu.transport, self.tu, msg, (dest.host, dest.port))
+        self.clientState = "reinviteSent"
+        self.tu.cts[ct] = self
+
+
     def generateRequest(self, method):
         #RFC 3261 12.2.1.1
         r = Request(method, self.remoteAddress[1])
@@ -177,29 +227,32 @@ class Dialog:
         r.addHeader('content-length', 0)
         return r
 
-    def _sendRequest(self, method):
-        msg = self.generateRequest(method)
 
     def _findDest(self, msg):
         rs = msg.headers.get('route', None)
         if rs:
             dest = parseAddress(rs[0])[1]
         else:
-            dest = msg.uri
+            dest = self.remoteAddress[1]
         return dest
 
 
     def sendBye(self):
         "Send a BYE and stop media."
         msg = self.generateRequest('BYE')
+        self.clientState = "byeSent"
         dest = self._findDest(msg)
         ct = ClientTransaction(self.tu.transport, self.tu, msg, (dest.host, dest.port))
         self.tu.cts[ct] = self #is this bad?
         self.end()
 
-    def sendAck(self):
+    def sendAck(self, body=""):
         msg = self.generateRequest('ACK')
         msg.headers['cseq'] = ["%s ACK" % self.msg.headers['cseq'][0].split(' ')[0]]
+        msg.body = body
+        msg.headers['content-length'] = [str( len(body))]
+        if body:
+            msg.addHeader("content-type", "application/sdp")
         dest = self._findDest(msg)
         msg.headers.setdefault('via', []).insert(0, Via(self.tu.transport.host, self.tu.transport.port,
                                                         rport=True,
@@ -231,6 +284,14 @@ class Dialog:
         "Play a PCM-encoded WAV file. (Compressed WAVs probably won't work.)"
         return self.playFile(WavReader(f), samplesize=160)
 
+    def startAudio(self, sdp):
+        md = sdp.getMediaDescription('audio')
+        addr = md.ipaddr or sdp.ipaddr
+        def go(ipaddr):
+            remoteAddr = (ipaddr, md.port)
+            self.rtp.start(remoteAddr)
+        reactor.resolve(addr).addCallback(go)
+        
     def stopPlaying(self):
         if self.LC:
             self.LC.stop()
@@ -239,6 +300,17 @@ class Dialog:
     def end(self):
         self.rtp.stopSendingAndReceiving()
         self.callController.callEnded(self)
+
+def upgradeSDP(currentSession, newSDP):
+    "Read the media description from the new SDP and update the current session by removing the current media."
+    
+    sdp = SDP(currentSession)
+    if newSDP.ipaddr:
+        c = (newSDP.nettype, newSDP.addrfamily, newSDP.ipaddr)
+        sdp.nettype, sdp.addrfamily, sdp.ipaddr = c
+    sdp.mediaDescriptions =  newSDP.mediaDescriptions
+    sdp._o_version = str(int(sdp._o_version) + 1)
+    return sdp
 
 class ICallControllerFactory(Interface):
     def buildCallController(self, dialog):
@@ -288,32 +360,79 @@ class ICallController(Interface):
         10 and 11.
         """
 
+def _matchToDialog(msg, origin, dest, dialogs):
+    dialog= dialogs.get(
+        (msg.headers['call-id'][0],
+         parseAddress(msg.headers[origin][0])[2].get('tag',''),
+         parseAddress(msg.headers[dest][0])[2].get('tag','')),
+        None)
+    return dialog
 
-class UserAgentServer:
+def matchResponseToDialog(msg, dialogs):
+    return _matchToDialog(msg, 'from', 'to', dialogs)
+
+def matchRequestToDialog(msg, dialogs):
+    return _matchToDialog(msg, 'to', 'from', dialogs)
+
+
+
+class UserAgent(SIPResolverMixin):
     """
-    I listen on a sine.sip.SIPTransport and accept incoming SIP calls,
-    directing events from them to an ICallController implementor,
-    looked up via cred.
+    I listen on a sine.sip.SIPTransport and create or accept SIP calls
     """
     implements(ITransactionUser)
-    def __init__(self, store, localHost, dialogs=None):
-        self.store = store
-        self.localHost = localHost
-        if dialogs is not None:
-            self.dialogs = dialogs
-        else:
+
+    def server(cls, voicesystem, localHost, dialogs=None):
+        """
+        I listen for incoming SIP calls and connect them to
+        ICallController instances, looked up via an IVoiceSystem.
+        """
+        self = cls(localHost, dialogs)
+        self.voicesystem = voicesystem
+        return self
+
+    server = classmethod(server)
+
+    def client(cls, controller, localpart, localHost, dialogs=None):
+        """
+        I create calls to SIP URIs and connect them to my ICallController instance.
+        """
+        self = cls(localHost, dialogs)
+        self.controller = controller
+        self.user = localpart
+        return self
+
+    client = classmethod(client)
+
+    def __init__(self, localHost, dialogs):
+        if dialogs is None:
             self.dialogs = {}
+        else:
+            self.dialogs = dialogs
+        self.cts = {}
         self.host = localHost
 
     def start(self, transport):
         self.transport = transport
 
+    def maybeStartAudio(self, dialog, sdp):
+        """
+        Start audio on the dialog.  This method is designed to be
+        overridden by user-agents that provide facilities like
+        third-party call control.  See L{sine.tpcc} for details.
+        """
+        debug("START AUDIO (maybe)")
+        dialog.startAudio(sdp)
+
     def requestReceived(self, msg, addr):
         #RFC 3261 12.2.2
-        st = ServerTransaction(self.transport, self, msg, addr)
+        if msg.method == "INVITE":
+            st = ServerInviteTransaction(self.transport, self, msg, addr)
+        else:
+            st = ServerTransaction(self.transport, self, msg, addr)
         #dialog checking
+        dialog = matchRequestToDialog(msg, self.dialogs)
 
-        dialog = self.matchDialog(msg)
         #untagged requests must be checked against ongoing transactions
         # see 8.2.2.2
 
@@ -321,10 +440,8 @@ class UserAgentServer:
         if not dialog and parseAddress(msg.headers['to'][0])[2].get('tag',None):
             #uh oh, there was an expectation of a dialog
             #but we can't remember it (maybe we crashed?)
-
             st.messageReceivedFromTU(responseFromRequest(481, msg))
             return defer.succeed(st)
-
             #authentication
             #check for Require
         m = getattr(self, "process_" + msg.method, None)
@@ -352,32 +469,54 @@ class UserAgentServer:
     def process_INVITE(self, st, msg, addr, dialog):
         #RFC 3261 13.3.1
         if dialog:
-            #mid-request!
-            #something special needs to happen with INVITEs here
-            print "Target refresh requests are unimplemented"
-            st.messageReceivedFromTU(dialog.responseFromRequest(501, msg))
+            #it's a reinvite
+            if msg.body:
+                #new SDP ahoy
+                sdp = SDP(msg.body)
+            else:
+                sdp = None
+            mysdp = dialog.rtp.getSDP(sdp)
+            if not mysdp.hasMediaDescriptions():
+                st.messageReceivedFromTU(responseFromRequest(488, msg))
+                return st
+            dialog.sessionDescription = mysdp
+            if dialog.clientState == "reinviteSent":
+                st.messageReceivedFromTU(dialog.responseFromRequest(491, msg))
+            else:
+                if sdp:
+                    self.maybeStartAudio(dialog, sdp)
+                dialog.msg = msg
+                dialog.reinviteMsg = True
+                dialog.remoteAddress = parseAddress(msg.headers['from'][0])
+                response = dialog.responseFromRequest(200, msg, mysdp.show())
+                st.messageReceivedFromTU(response)
+                dialog.ackTimer = [None, 0]
+                self.ackTimerRetry(dialog, response)
+
             return st
-        #otherwise, time to start a new one
+        #otherwise, time to start a new dialog
 
         d = Dialog.forServer(self, URL(self.host,
                              parseAddress(msg.headers['to'][0])[1].username),
                              msg)
 
+
         def lookupElement(dialog):
-            def startAudio(sdp):
-                md = sdp.getMediaDescription('audio')
-                ipaddr = md.ipaddr or sdp.ipaddr
-                remoteAddr = (ipaddr, md.port)
-                dialog.rtp.start(remoteAddr)
-            avatar = IVoiceSystem(self.store).localElementByName(parseAddress(msg.headers['to'][0])[1].username)
+
+            avatar = self.voicesystem.localElementByName(parseAddress(msg.headers['to'][0])[1].username)
 
             dialog.callController = avatar.buildCallController(dialog)
-            sdp = SDP(msg.body)
+            if msg.body:
+                sdp = SDP(msg.body)
+            else:
+                sdp = None
             mysdp = dialog.rtp.getSDP(sdp)
-            if not sdp.hasMediaDescriptions():
+            dialog.sessionDescription = mysdp
+            if not mysdp.hasMediaDescriptions():
                 st.messageReceivedFromTU(responseFromRequest(406, msg))
                 return st
-            startAudio(sdp)
+            if sdp:
+                self.maybeStartAudio(dialog, sdp)
             self.dialogs[dialog.getDialogID()] = dialog
             response = dialog.responseFromRequest(200, msg, mysdp.show())
             st.messageReceivedFromTU(response)
@@ -396,19 +535,16 @@ class UserAgentServer:
         timer = dialog.ackTimer[0]
         if timer.active():
             timer.cancel()
-        dialog.callController.callBegan(dialog)
+        if not getattr(dialog, 'reinviteMsg', None):
+            #only do this for the initial INVITE
+            dialog.callController.callBegan(dialog)
+        else: debug("reinvite ACKed")
+        if msg.body:
+            #must've gotten an invite with no SDP
+            #so this is the answer
+            sdp = SDP(msg.body)
+            self.maybeStartAudio(dialog, sdp)
 
-    def matchDialog(self, msg):
-        """
-        Look up the dialog that this message belongs to, if any.
-        Returns None if no such dialog exists.
-        """
-        dialog= self.dialogs.get(
-            (msg.headers['call-id'][0],
-             parseAddress(msg.headers['to'][0])[2].get('tag',''),
-             parseAddress(msg.headers['from'][0])[2].get('tag','')),
-            None)
-        return dialog
 
     def process_BYE(self, st, msg, addr, dialog):
         if not dialog:
@@ -422,12 +558,110 @@ class UserAgentServer:
 
 
     def responseReceived(self, response, ct=None):
-        #presumably just BYE responses
-        pass
 
-    def clientTransactionTerminated(self, ct=None):
-        #do we care?
-        pass
+        #OK this function is a bit hairy because I don't want to track
+        #any call state in this class and responses to various things
+        #need to be handled differently. The main event is 2xx
+        #responses to the INVITE -- that changes the early dialog
+        #(created when the INVITE was sent) to an confirmed dialog.
+        #Error responses result in dialog teardown, as do responses to BYEs.
+
+        #RFC 3261 12.2.1.2
+        dialog = self.cts.get(ct, None)
+        if dialog is None:
+            dialog = matchResponseToDialog(response, self.dialogs)
+
+        if 'INVITE' in response.headers['cseq'][0] and 200 <= response.code < 300:
+            self.acknowledgeInvite(dialog, response)
+
+        if dialog.clientState == "early":
+            self.earlyResponseReceived(dialog, response, ct)
+        if dialog.clientState == "byeSent":
+            self.byeResponseReceived(dialog, response, ct)
+        elif dialog.clientState == "reinviteSent":
+            self.reinviteResponseReceived(dialog, response, ct)
+
+
+    def acknowledgeInvite(self, dialog, response):
+        #RFC 3261, 13.2.2.4
+        if dialog.sessionDescription:
+            #the INVITE contained the offer, no body in the ACK
+            dialog.sendAck()
+        else:
+            #the 200 contained the offer, answer in the ACK
+            sdp = SDP(response.body)
+            mysdp = dialog.rtp.getSDP(sdp).show()
+            dialog.sendAck(mysdp)
+            dialog.sessionDescription = mysdp
+
+    def reinviteResponseReceived(self, dialog, response, ct):
+        if response.code == 491:
+            if dialog.direction == "client":
+                reactor.callLater(random.randint(210,400)/100.0,
+                                  dialog._sendReinvite, dialog.reinviteMsg)
+            else:
+                reactor.callLater(random.randint(0, 200)/100.0,
+                                  dialog._sendReinvite, dialog.reinviteMsg)
+        elif 200 <= response.code < 300:
+            dialog.clientState = "confirmed"
+            dialog.msg = dialog.reinviteMsg
+            dialog.contactURI = parseAddress(dialog.msg.headers['contact'][0])[1]
+            dialog.sessionDescription = dialog.reinviteSDP
+        else:
+            dialog.clientState = "confirmed"
+
+    def byeResponseReceived(self, dialog, response, ct):
+        del self.cts[ct]
+        del self.dialogs[dialog.getDialogID()]
+
+    def earlyResponseReceived(self, dialog, response, ct):
+        if 200 <= response.code < 300:
+            #RFC 3261 12.1.2
+            dialog.clientState = "confirmed"
+            dialog.remoteAddress = parseAddress(response.headers['to'][0])
+            dialog.routeSet = [parseAddress(route) for route in response.headers.get('record-route', [])[::-1]]
+            self.dialogs[dialog.getDialogID()] = dialog
+            sdp = SDP(response.body)
+            self.maybeStartAudio(dialog, sdp)
+            if self.controller:
+                self.controller.callBegan(dialog)
+        elif 300 <= response.code < 400:
+            raise NotImplemented, "Dunno about redirects yet"
+        elif 400 <= response.code < 700:
+            if dialog.getDialogID() in self.dialogs:
+                del self.dialogs[dialog.getDialogID()]
+            del self.cts[ct]
+            self.controller.callFailed(dialog, response)
+
+    def call(self, uri):
+        """
+        Call the specified URI and notify our controller when it is set up.
+        """
+        return self._doCall(uri)
+
+    def _doCall(self, uri, noSDP=False,fromName=""):
+        dlgD = Dialog.forClient(self, URL(self.host, self.user), uri, self.controller, noSDP, fromName)
+        def _cb(dlg):
+            targetsD = self._lookupURI(uri)
+            def _send(targets):
+                #'targets' is a list of (host, port) obtained from SRV lookup
+                #ideally, if there's a 503 response to this message, we can
+                #resend through another target.
+                #For now we'll just send to the first and hope for the best.
+
+                ct = ClientInviteTransaction(self.transport, self, dlg.msg, targets[0])
+                self.cts[ct] = dlg
+            targetsD.addCallback(_send)
+            return dlg
+        return dlgD.addCallback(_cb)
+
+
+    def clientTransactionTerminated(self, ct):
+        if ct not in self.cts:
+            return
+        dialog = self.cts[ct]
+        if dialog.clientState != "confirmed":
+            self.responseReceived(ct.response)
 
     def incomingRTP(self, dialog, packet):
         from xshtoom.rtp.formats import PT_NTE
@@ -490,147 +724,3 @@ class SimpleCallRecipient:
     def endRecording(self):
         if self.file:
             self.file.close()
-
-class UserAgentClient(SIPResolverMixin):
-    implements(ITransactionUser)
-    """
-    I listen on a sine.sip.SIPTransport and set up calls to SIP addresses from ICallController instances.
-    """
-    def __init__(self, controller, localpart, localHost, dialogs=None):
-        self.controller = controller
-        if dialogs is None:
-            self.dialogs = {}
-        else:
-            self.dialogs = dialogs
-        self.cts = {}
-        self.host = localHost
-        self.user = localpart
-    def start(self, transport):
-        self.transport = transport
-
-    def call(self, uri):
-        """
-        Call the specified URI and notify our controller when it is set up.
-        """
-        def _cb(dlg):
-            def _send(targets):
-                #'targets' is a list of (host, port) obtained from SRV lookup
-                #ideally, if there's a 503 response to this message, we can
-                #resend through another target.
-                #For now we'll just send to the first and hope for the best.
-
-                ct = ClientInviteTransaction(self.transport, self, dlg.msg, targets[0])
-                self.cts[ct] = dlg
-            self._lookupURI(uri).addCallback(_send)
-
-        #XXX Should call() return a deferred that fires after ACK?
-        #    Or should all call control be done via self.controller?
-        Dialog.forClient(self, URL(self.host, self.user), uri, self.controller).addCallback(_cb)
-
-    def responseReceived(self, response, ct=None):
-        
-        #OK this function is a bit hairy because I don't want to track
-        #any call state in this class and responses to various things
-        #need to be handled differently. The main event is 2xx
-        #responses to the INVITE -- that changes the early dialog
-        #(created when the INVITE was sent) to an confirmed dialog.
-        #Error responses result in dialog teardown, as do responses to BYEs.
-
-        #RFC 3261 12.2.1.2
-        
-        dialog = self.cts.get(ct, None)
-        if dialog is None:
-            dialog = self.matchResponseToDialog(response)
-
-        def startAudio(sdp):
-            md = sdp.getMediaDescription('audio')
-            ipaddr = md.ipaddr or sdp.ipaddr
-            remoteAddr = (ipaddr, md.port)
-            dialog.rtp.start(remoteAddr)
-
-        if dialog.clientState == "early":
-            if 200 <= response.code < 300:
-                #RFC 3261 12.1.2
-                dialog.clientState = "confirmed"
-                dialog.remoteAddress = parseAddress(response.headers['to'][0])
-                dialog.routeSet = [parseAddress(route) for route in response.headers.get('record-route', [])[::-1]]
-                self.dialogs[dialog.getDialogID()] = dialog
-                startAudio(SDP(response.body))
-                self.controller.callBegan(dialog)
-            elif 300 <= response.code < 400:
-                raise NotImplemented, "Dunno about redirects yet"
-            elif 400 <= response.code < 700:
-                if dialog.getDialogID() in self.dialogs:
-                    del self.dialogs[dialog.getDialogID()]
-                del self.cts[ct]
-                self.controller.callFailed(dialog, response)
-
-        if 'INVITE' in response.headers['cseq'][0] and 200 <= response.code < 300:
-            #RFC 3261, 13.2.2.4
-            dialog.sendAck()
-
-        if dialog.clientState == "byeSent":
-            del self.cts[ct]
-            del self.dialogs[dialog.getDialogID()]
-
-        
-
-    def requestReceived(self, msg, addr):
-        st = ServerTransaction(self.transport, self, msg, addr)
-        #dialog checking
-        dialog = self.matchRequestToDialog(msg)
-        if not dialog and parseAddress(msg.headers['to'][0])[2].get('tag',None):
-            st.messageReceivedFromTU(responseFromRequest(481, msg))
-            return
-        if msg.method == 'BYE':
-            dialog.end()
-            response = dialog.responseFromRequest(200, msg, None)
-            st.messageReceivedFromTU(response)
-
-            del self.dialogs[dialog.getDialogID()]
-
-    def matchResponseToDialog(self, msg):
-        dialog= self.dialogs.get(
-            (msg.headers['call-id'][0],
-             parseAddress(msg.headers['from'][0])[2].get('tag',''),
-             parseAddress(msg.headers['to'][0])[2].get('tag','')),
-            None)
-        return dialog
-
-    def matchRequestToDialog(self, msg):
-        dialog= self.dialogs.get(
-            (msg.headers['call-id'][0],
-             parseAddress(msg.headers['to'][0])[2].get('tag',''),
-             parseAddress(msg.headers['from'][0])[2].get('tag','')),
-            None)
-        return dialog
-
-    def clientTransactionTerminated(self, ct):
-        dialog = self.cts[ct]
-        if dialog.clientState != "confirmed":
-            self.responseReceived(ct.response)
-
-    def incomingRTP(self, dialog, packet):
-        from xshtoom.rtp.formats import PT_NTE
-        if packet.header.ct is PT_NTE:
-            data = packet.data
-            key = ord(data[0])
-            start = (ord(data[1]) & 128) and True or False
-            if start:
-                #print "start inbound dtmf", key
-                d = defer.maybeDeferred(dialog.callController.receivedDTMF, dialog, key)
-            else:
-                #print "stop inbound dtmf", key
-                return
-        else:
-            d = defer.maybeDeferred(dialog.callController.receivedAudio, dialog, dialog.codec.decode(packet))
-        def e(err):
-            err.trap(Hangup)
-            #fudge a little to let playback finish
-            reactor.callLater(0.5, dialog.sendBye)
-        d.addErrback(e)
-
-
-    def dropCall(self, *args, **kwargs):
-        "For shtoom compatibility."
-        pass

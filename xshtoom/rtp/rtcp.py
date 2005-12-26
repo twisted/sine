@@ -259,9 +259,12 @@ class RTCPCompound:
 
 
 class RTCPProtocol(DatagramProtocol):
+    def __init__(self, rtp):
+        self.rtp = rtp
     def datagramReceived(self, datagram, addr):
         #print "received RTCP from %r (%d bytes): \n%s"%(addr, len(datagram), hexrepr(datagram))
         packet = RTCPCompound(datagram)
+        self.rtp.lastreceivetime = time.time()
         #for rtcp in packet:
         #    print "RTCP:", rtcp
 

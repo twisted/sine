@@ -684,9 +684,10 @@ class UserAgent(SIPResolverMixin):
         d.addErrback(e)
 
 
-    def dropCall(self, *args, **kwargs):
+    def dropCall(self, dialog):
         "For shtoom compatibility."
-        pass
+        dialog.sendBye()
+        
 
 
 class SimpleCallRecipient:

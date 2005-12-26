@@ -9,7 +9,7 @@ from time import sleep, time
 from twisted.internet import reactor, defer
 from twisted.internet.protocol import DatagramProtocol
 from twisted.python import log
-
+from twisted.internet.task import LoopingCall
 from xshtoom.rtp.formats import SDPGenerator, PT_CN, PT_xCN, PT_NTE, PT_PCMU
 from xshtoom.rtp.packets import RTPPacket, parse_rtppacket
 from xshtoom.audio.converters import MediaSample
@@ -47,7 +47,7 @@ class RTPProtocol(DatagramProtocol):
         # onto the Net is to reopen the audio device with a None (default)
         # media sample handler instead of this RTP object as the media sample handler.
         self.sending = False
-
+        
     def getSDP(self, othersdp=None):
         sdp = SDPGenerator().getSDP(self)
         if othersdp:
@@ -82,12 +82,15 @@ class RTPProtocol(DatagramProtocol):
         d = defer.Deferred()
         self._socketCompleteDef = d
         self._socketCreationAttempt(locIP)
+        self.lastreceivetime = time()
+        self.rtptimeout = 60 # make this configurable?
+        self._startTimeouter()
         return d
 
     def _socketCreationAttempt(self, locIP=None):
         from twisted.internet.error import CannotListenError
         from xshtoom.rtp import rtcp
-        self.RTCP = rtcp.RTCPProtocol()
+        self.RTCP = rtcp.RTCPProtocol(self)
 
         # RTP port must be even, RTCP must be odd
         # We select a RTP port at random, and try to get a pair of ports
@@ -135,6 +138,13 @@ class RTPProtocol(DatagramProtocol):
             # adjacent port numbers. Please, someone make the pain stop.
             self.natMapping()
 
+    def _startTimeouter(self):
+        def checkTimeout():
+            if time() >  self.lastreceivetime + self.rtptimeout:
+                self.app.dropCall(self.cookie)
+                self.Done = True
+        self.timeouterLoop = LoopingCall(checkTimeout)
+        self.timeouterLoop.start(61)
     def getVisibleAddress(self):
         ''' returns the local IP address used for RTP (as visible from the
             outside world if STUN applies) as ( 'w.x.y.z', rtpPort)
@@ -258,8 +268,12 @@ class RTPProtocol(DatagramProtocol):
         if self.seq >= TWO_TO_THE_48TH:
             self.seq = self.seq - TWO_TO_THE_48TH
 
+        bytes = packet.netbytes()
+        ## For RTCP sender report.
+        #self.currentSentBytesTotal += len(bytes)
+        #self.currentSentPacketsTotal += 1
         try:
-            self.transport.write(packet.netbytes(), self.dest)
+            self.transport.write(bytes, self.dest)
         except Exception, le:
             pass
 
@@ -293,6 +307,7 @@ class RTPProtocol(DatagramProtocol):
         self._send_cn_packet(logit=True)
 
     def datagramReceived(self, datagram, addr, t=time):
+        self.lastreceivetime = time()
         packet = parse_rtppacket(datagram)
 
         try:
@@ -361,6 +376,9 @@ class RTPProtocol(DatagramProtocol):
         return int(hex[:bits//4],16)
 
     def handle_media_sample(self, sample):
+        if time() >  self.lastreceivetime + self.rtptimeout:
+            self.app.dropCall(self.cookie)
+            self.Done = True
         if self.Done:
             if self._cbDone:
                 self._cbDone()

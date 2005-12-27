@@ -171,7 +171,7 @@ class PSTNContact:
 class PSTNPortalWrapper:
 
     def __init__(self, realPortal, targetHost, targetPort):
-        self.portal = realPortal
+        self.realPortal = realPortal
         self.targethost = targetHost
         self.targetport = targetPort
 

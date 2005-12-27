@@ -1,4 +1,4 @@
-import os
+import os, getpass
 
 from zope.interface import classProvides
 
@@ -64,6 +64,51 @@ class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
 
         ticketSignup.installOn(s)
 
+class AddUser(usage.Options, axiomatic.AxiomaticSubCommandMixin):
+    "Add a SIP proxy user."
+
+    longdesc = __doc__
+    synopsis = "<username> <domain> [password]"
+
+    def parseArgs(self, username, domain, password=None):
+        self['username'] = self.decodeCommandLine(username)
+        self['domain'] = self.decodeCommandLine(domain)
+        self['password'] = password
+
+    def postOptions(self):
+        for ls in self.store.query(userbase.LoginSystem):
+            break
+        else:
+            raise usage.UsageError("No userbase found!")
+
+        msg = 'Enter new SIP password: '
+        while not self['password']:
+            password = getpass.getpass(msg)
+            second = getpass.getpass('Repeat to verify: ')
+            if password == second:
+                self['password'] = password
+            else:
+                msg = 'Passwords do not match.  Enter new SIP password: '
+
+        try:
+            acc = ls.addAccount(unicode(self['username']),
+                                unicode(self['domain']),
+                                unicode(self['password']))
+            userbase.LoginMethod(store=self.store,
+                                 localpart=self['username'],
+                                 internal=True,
+                                 protocol=u'sip',
+                                 verified=True,
+                                 domain=self['domain'],
+                                 account=acc)
+            av = acc.avatars.open()
+            av.findOrCreate(sipserver.TrivialContact).installOn(av)
+        except userbase.DuplicateUser:
+            raise usage.UsageError("An account by that name already exists.")
+
+
+
+
 class SIPProxyConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
     classProvides(plugin.IPlugin, iaxiom.IAxiomaticCommand)
 
@@ -75,7 +120,8 @@ class SIPProxyConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
     optParameters = [
         ('ticket-signup-url', None, 'signup', 'URL at which to place a ticket request page')]
 
-    subCommands = [('install', None, Install, "Install SIP Proxy components")]
+    subCommands = [('install', None, Install, "Install SIP Proxy components"),
+                   ('adduser', None, AddUser, "Add a SIP user")]
     didSomething = False
 
     def getStore(self):

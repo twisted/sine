@@ -43,7 +43,7 @@ To: Bob <sip:bob@proxy2.org>;tag=314159\r
 Call-ID: 3848276298220188511@client.com\r
 CSeq: 1 INVITE\r
 User-Agent: Divmod Sine\r
-Content-Length: 126\r
+Content-Length: 123\r
 Content-Type: application/sdp\r
 Contact: sip:bob@127.0.0.2\r
 \r
@@ -134,7 +134,7 @@ class CallTerminateTest(FakeClockTestCase):
         account = self.login.addAccount('bob', 'proxy2.org', None)
         us = account.avatars.open()
         FakeAvatar(store=us).installOn(us)
-        self.uas = useragent.UserAgentServer(us, "127.0.0.2")
+        self.uas = useragent.UserAgent.server(sip.IVoiceSystem(us), "127.0.0.2")
         self.sent = []
         self.sip = sip.SIPTransport(self.uas, ["server.com"], 5060)
         self.sip.sendMessage = lambda dest, msg: self.sent.append((dest, msg))

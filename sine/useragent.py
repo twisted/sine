@@ -299,6 +299,7 @@ class Dialog:
 
     def end(self):
         self.rtp.stopSendingAndReceiving()
+        self.rtp.timeouterLoop.stop()
         self.callController.callEnded(self)
 
 def upgradeSDP(currentSession, newSDP):

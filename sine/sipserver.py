@@ -26,7 +26,7 @@ class SIPServer(Item, Service):
     portno = integer(default=5060)
     hostnames =  bytes()
     installedOn = reference()
-
+    pstn = bytes()
     parent = inmemory()
     running = inmemory()
     name = inmemory()
@@ -51,12 +51,33 @@ class SIPServer(Item, Service):
             raise SIPConfigurationError(
                 'No checkers: '
                 'you need to install a userbase before using this service.')
-        portal = PSTNPortalWrapper(Portal(realm, [chkr]), 'joule.divmod.com', 5061)
+        if self.pstn:
+            pstnurl = sip.parseURL(self.pstn)
+            portal = PSTNPortalWrapper(Portal(realm, [chkr]), pstnurl.host, pstnurl.port)
+        else:
+            portal = Portal(realm, [chkr])
         self.proxy = sip.Proxy(portal)
+        regs = list(self.store.query(Registration, Registration.parent==self))
+        if regs:
+            rc = sip.RegistrationClient()
+            self.proxy.installRegistrationClient(rc)
+            for reg in regs:
+                print vars(reg)
+                if not (reg.username and reg.domain):
+                    raise SIPConfigurationError("Bad registration URL:", "You need both a username and a domain to register")
+                rc.register(reg.username, reg.password, reg.domain)
 
         f = sip.SIPTransport(self.proxy, self.hostnames.split(','), self.portno)
 
         self.port = reactor.listenUDP(self.portno, f)
+
+class Registration(Item):
+    typename = "sine_registration"
+    schemaVersion = 1
+    parent = reference()
+    username = text()
+    domain = text()
+    password = text()
 
 class TrivialRegistrarInitializer(Item, InstallableMixin):
     """
@@ -225,10 +246,10 @@ class TrivialContact(Item, InstallableMixin):
             return defer.fail(sip.RegistrationError(480))
 
     def callIncoming(self, name, uri, caller):
-        Call(self.store, name=name, time=Time(), uri=str(uri), kind='from')
+        Call(store=self.store, name=name, time=Time(), uri=unicode(str(uri)), kind=u'from')
 
     def callOutgoing(self, name, uri):
-        Call(self.store, name=name, time=Time(), uri=str(uri), kind='to')
+        Call(store=self.store, name=name, time=Time(), uri=unicode(str(uri)), kind=u'to')
 
 
 class SIPDispatcherService(Item, Service):

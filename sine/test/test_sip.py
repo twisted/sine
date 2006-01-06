@@ -469,10 +469,39 @@ Contact: <sip:alice@client.com>\r
 class TestClock:
     time = 0
     def seconds(self):
+        # Make sure that callLater(0) works for sure
+        self.advance(0.0000001)
         return self.time
 
     def advance(self, n):
         self.time += n
+
+class TaskQueue(object):
+
+    def __init__(self):
+        self.tasks = []
+        self.later = None
+        self.flushd = None
+
+    def flush(self):
+        self.later = None
+        for (f, a, k) in self.tasks:
+            f(*a, **k)
+        self.tasks[:] = ()
+        if self.flushd is not None:
+            self.flushd.callback(None)
+            self.flushd = None
+
+    def addTask(self, f, *a, **k):
+        self.tasks.append((f, a, k))
+        self.later = reactor.callLater(0, self.flush)
+
+    def uponCompletion(self):
+        if self.later is None:
+            return defer.succeed()
+        self.flushd = defer.Deferred()
+        return self.flushd
+
 
 class FakeClockTestCase(unittest.TestCase):
     # Do NOT, EVER, leave base.seconds set to something other than its
@@ -491,9 +520,11 @@ class FakeClockTestCase(unittest.TestCase):
         base.seconds = self.originalSeconds
 
 
+
 class ProxyTestCase(FakeClockTestCase):
 
     def setUp(self):
+        self.tasks = []
         r = TestRealm("proxy1.org")
         p = cred.portal.Portal(r)
         p.registerChecker(PermissiveChecker())
@@ -504,11 +535,7 @@ class ProxyTestCase(FakeClockTestCase):
         self.sip.sendMessage = lambda dest, msg: self.sent.append((dest, msg))
 
     def tearDown(self):
-        self.clock.advance(33)
-        reactor.iterate()
-        self.clock.advance(33)
-        reactor.iterate()
-
+        return self.sip.stopTransport(hard=True)
 
     def testRequestForward(self):
         self.sip.datagramReceived(exampleInvite, (testurls["client.com"], 5060))
@@ -647,11 +674,11 @@ class RegistrationTestCase(FakeClockTestCase):
         self.assertEquals(m.headers["contact"], ["sip:joe@client.com:1234"])
         self.failUnless(int(m.headers["expires"][0]) in (3600, 3601, 3599, 3598))
         self.assertEquals(self.countRegistrations(), 1)
-        ignoredIface, contact, ignoredLogout = unittest.deferredResult(
-            self.proxy.portal.login(Preauthenticated('joe@proxy.com'),
-                                    None, sip.IContact))
-        desturl = contact.getRegistrationInfo("__registrar__")[0][0]
-        self.assertEquals((desturl.host, desturl.port), ("client.com", 1234))
+        def withResult((ignoredIface, contact, ignoredLogout)):
+            desturl = contact.getRegistrationInfo("__registrar__")[0][0]
+            self.assertEquals((desturl.host, desturl.port), ("client.com", 1234))
+        return self.proxy.portal.login(Preauthenticated('joe@proxy.com'),
+                                       None, sip.IContact).addCallback(withResult)
 
 
     def testUnregister(self):
@@ -721,8 +748,9 @@ class RegistrationTestCase(FakeClockTestCase):
         self.realm.permissive = 0
         self.registerGood()
         url = sip.URL(username="joe", host="foo.com")
-        f = unittest.deferredResult(self.proxy.findTargets(url, None))
-        self.assertEquals(f[0], url)
+        ftd = self.proxy.findTargets(url, None)
+        ftd.addCallback(lambda f: self.assertEquals(f[0], url))
+        return ftd
 
     def testNoContactLookup(self):
         self.realm.permissive = 0
@@ -731,7 +759,6 @@ class RegistrationTestCase(FakeClockTestCase):
         def e(err):
             err.trap(sip.SIPLookupError)
         return self.proxy.findTargets(url, None).addErrback(e)
-    testNoContactLookup.todo = "Fix cred to raise NoSuchUser when looking up nonexistent users"
 
     def countRegistrations(self):
         return self.realm.regs
@@ -740,10 +767,20 @@ class RegistrationTestCase(FakeClockTestCase):
 class Client:
 
     def __init__(self):
-         self.received = []
+        self.waiting = []
+        self.received = []
 
     def responseReceived(self, response, ct=None):
         self.received.append(response)
+        while self.waiting and len(self.received) >= self.waiting[-1][0]:
+            n, d = self.waiting.pop()
+            d.callback(n)
+
+    def waitForResponses(self, num=1):
+        d = defer.Deferred()
+        self.waiting.append((num, d))
+        self.waiting.sort()
+        return d
 
     def start(self, thingy):
         pass
@@ -772,11 +809,9 @@ class LiveTest(FakeClockTestCase):
         self.clientTransport.port = self.clientPort.getHost().port
 
     def tearDown(self):
-        self.clock.advance(181)
         self.clientPort.stopListening()
         self.serverPort.stopListening()
-        reactor.iterate()
-        reactor.iterate()
+        self.transport.stopTransport(True)
 
     def testRegister(self):
         p = self.clientPort.getHost().port
@@ -788,11 +823,12 @@ class LiveTest(FakeClockTestCase):
         r.addHeader("CSeq", "25317 REGISTER")
         r.addHeader("via", sip.Via("127.0.0.1", port=p).toString())
         self.clientTransport.sendRequest(r, ("127.0.0.1", self.serverPortNo))
-        while not len(self.client.received):
-            reactor.iterate()
-        self.assertEquals(len(self.client.received), 1)
-        r = self.client.received[0]
-        self.assertEquals(r.code, 200)
+        def finished(r):
+            self.assertEquals(len(self.client.received), 1)
+            r = self.client.received[0]
+            self.assertEquals(r.code, 200)
+
+        return self.client.waitForResponses().addCallback(finished)
 
 registerRequest = """
 REGISTER sip:intarweb.us SIP/2.0\r
@@ -1344,15 +1380,16 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
                                      ["proxy2.org", "10.1.0.2"], 5060)
         self.testMessages = []
         self.parser = sip.MessagesParser(self.testMessages.append)
-
+        self.eventQueue = TaskQueue()
+        
         class FakeDatagramTransport1:
             def __init__(self):
                 self.written = []
             def write(ft, packet, addr=None):
                 ft.written.append(packet)
                 if addr[0] != "10.0.0.1":
-                    reactor.callLater(0, self.sip2.datagramReceived,
-                                      packet, ("10.1.0.1", 5060))
+                    self.eventQueue.addTask(self.sip2.datagramReceived,
+                                            packet, ("10.1.0.1", 5060))
 
         class FakeDatagramTransport2:
             def __init__(self):
@@ -1360,8 +1397,8 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
             def write(ft, packet, addr=None):
                 ft.written.append(packet)
                 if addr[0] == "10.1.0.1":
-                    reactor.callLater(0, self.sip1.datagramReceived,
-                                      packet, ("10.1.0.2", 5060))
+                    self.eventQueue.addTask(self.sip1.datagramReceived,
+                                            packet, ("10.1.0.2", 5060))
                 elif addr[0] != "10.0.0.2":
                     raise unittest.FailTest("Proxy 2 sent to a wrong host")
 
@@ -1412,61 +1449,69 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
         self.inviteAnd180()
 
         self.sip2.datagramReceived(bob200Response, ("10.0.0.2", 5060)) # F12
-        reactor.iterate()
-        self.assertEquals(len(self.proxy2SendQueue), 1)
-        self.assertEquals(len(self.proxy1SendQueue), 1)
 
-        self.assertMsgEqual(self.proxy2SendQueue[0], interproxy200Response)#F13
-        self.assertMsgEqual(self.proxy1SendQueue[0], alice200Response) #F14
-        self.resetq()
+        def step1(x):
+            self.assertEquals(len(self.proxy2SendQueue), 1)
+            self.assertEquals(len(self.proxy1SendQueue), 1)
 
-        self.assertEquals(len(self.sip1.serverTransactions), 0)
-        self.assertEquals(len(self.sip2.serverTransactions), 0)
-        self.assertEquals(len(self.sip1.clientTransactions), 0)
-        self.assertEquals(len(self.sip2.serverTransactions), 0)
+            self.assertMsgEqual(self.proxy2SendQueue[0], interproxy200Response)#F13
+            self.assertMsgEqual(self.proxy1SendQueue[0], alice200Response) #F14
+            self.resetq()
 
-        self.sip1.datagramReceived(aliceAckRequest, ('10.0.0.1', 5060)) # F15
-        reactor.iterate()
-        self.assertEquals(len(self.proxy2SendQueue), 1)
-        self.assertEquals(len(self.proxy1SendQueue), 1)
-        self.parser.dataReceived(interproxyAckRequest);self.parser.dataDone() # F16
-        self.assertMsgEqual(self.proxy1SendQueue[0], interproxyAckRequest)#F16
-        self.assertMsgEqual(self.proxy2SendQueue[0], bobAckRequest)#F17
-        self.resetq()
+            self.assertEquals(len(self.sip1.serverTransactions), 0)
+            self.assertEquals(len(self.sip2.serverTransactions), 0)
+            self.assertEquals(len(self.sip1.clientTransactions), 0)
+            self.assertEquals(len(self.sip2.serverTransactions), 0)
 
-        self.assertEquals(len(self.sip1.serverTransactions), 0)
-        self.assertEquals(len(self.sip2.serverTransactions), 0)
-        self.assertEquals(len(self.sip1.clientTransactions), 0)
-        self.assertEquals(len(self.sip2.serverTransactions), 0)
+            self.sip1.datagramReceived(aliceAckRequest, ('10.0.0.1', 5060)) # F15
 
-        self.sip2.datagramReceived(bobByeRequest, ('10.0.0.2', 5060)) # F18
-        reactor.iterate()
-        self.assertEquals(len(self.proxy2SendQueue), 1)
-        self.assertEquals(len(self.proxy1SendQueue), 1)
+        def step2(x):
+            self.assertEquals(len(self.proxy2SendQueue), 1)
+            self.assertEquals(len(self.proxy1SendQueue), 1)
+            self.parser.dataReceived(interproxyAckRequest);self.parser.dataDone() # F16
+            self.assertMsgEqual(self.proxy1SendQueue[0], interproxyAckRequest)#F16
+            self.assertMsgEqual(self.proxy2SendQueue[0], bobAckRequest)#F17
+            self.resetq()
 
-        self.assertMsgEqual(self.proxy2SendQueue[0], interproxyByeRequest)#F19
-        self.assertMsgEqual(self.proxy1SendQueue[0], aliceByeRequest)#F20
-        self.resetq()
+            self.assertEquals(len(self.sip1.serverTransactions), 0)
+            self.assertEquals(len(self.sip2.serverTransactions), 0)
+            self.assertEquals(len(self.sip1.clientTransactions), 0)
+            self.assertEquals(len(self.sip2.serverTransactions), 0)
+
+            self.sip2.datagramReceived(bobByeRequest, ('10.0.0.2', 5060)) # F18
+
+        def step3(x):
+            self.assertEquals(len(self.proxy2SendQueue), 1)
+            self.assertEquals(len(self.proxy1SendQueue), 1)
+
+            self.assertMsgEqual(self.proxy2SendQueue[0], interproxyByeRequest)#F19
+            self.assertMsgEqual(self.proxy1SendQueue[0], aliceByeRequest)#F20
+            self.resetq()
+            self.sip1.datagramReceived(aliceByeResponse, ('10.0.0.1', 5060)) # F21
+
+        def step4(x):
+            self.assertEquals(len(self.proxy2SendQueue), 1)
+            self.assertEquals(len(self.proxy1SendQueue), 1)
+
+            self.assertMsgEqual(self.proxy1SendQueue[0], interproxyByeResponse)#F22
+            self.assertMsgEqual(self.proxy2SendQueue[0], bobByeResponse)#F23
+            self.resetq()
+
+        def step5(x):
+            self.clock.advance(33)
+
+        def step6(x):
+            self.assertEquals(len(self.sip1.serverTransactions), 0)
+            self.assertEquals(len(self.sip2.serverTransactions), 0)
+            self.assertEquals(len(self.sip1.clientTransactions), 0)
+            self.assertEquals(len(self.sip2.serverTransactions), 0)
+            self.assertEquals(len(self.proxy1.responseContexts), 0)
+            self.assertEquals(len(self.proxy2.responseContexts), 0)
 
 
-        self.sip1.datagramReceived(aliceByeResponse, ('10.0.0.1', 5060)) # F21
-        reactor.iterate()
-        self.assertEquals(len(self.proxy2SendQueue), 1)
-        self.assertEquals(len(self.proxy1SendQueue), 1)
-
-        self.assertMsgEqual(self.proxy1SendQueue[0], interproxyByeResponse)#F22
-        self.assertMsgEqual(self.proxy2SendQueue[0], bobByeResponse)#F23
-        self.resetq()
-
-        self.clock.advance(33)
-        reactor.iterate()
-
-        self.assertEquals(len(self.sip1.serverTransactions), 0)
-        self.assertEquals(len(self.sip2.serverTransactions), 0)
-        self.assertEquals(len(self.sip1.clientTransactions), 0)
-        self.assertEquals(len(self.sip2.serverTransactions), 0)
-        self.assertEquals(len(self.proxy1.responseContexts), 0)
-        self.assertEquals(len(self.proxy2.responseContexts), 0)
+        for step in [step1, step2, step3, step4, step5, step6]:
+            reactor.iterate()
+            step(None)
 
     def testCancelAfter180(self):
         #Section 3.8
@@ -1527,3 +1572,53 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
         reactor.iterate()
         reactor.iterate()
         self.resetq()
+
+class RegistrationClientTestCase(FakeClockTestCase):
+    def setUp(self):
+        self.realm = TestRealm("proxy.com")
+        self.realm.addUser('joe@proxy.com')
+        self.portal = cred.portal.Portal(self.realm)
+        c = cred.checkers.InMemoryUsernamePasswordDatabaseDontUse()
+        c.credentialInterfaces += (userbase.IPreauthCredentials,)
+        c.addUser('joe@proxy.com', 'passXword')
+        self.portal.registerChecker(c)
+        self.proxy = sip.Proxy(self.portal)
+        self.proxyTransport = sip.SIPTransport(self.proxy,
+                                          ["proxy.com",'127.0.0.1'], 5060)
+        self.sent = []
+        self.proxy._lookupURI = lambda uri: [(uri.host, uri.port)]
+        self.registrationClient = sip.RegistrationClient()
+        self.clientTransport = sip.SIPTransport(self.registrationClient,
+                                                ["client.com","10.0.0.1"], 5060)
+
+        self.eventQueue = TaskQueue()
+
+        class FakeDatagramTransport:
+            def __init__(self):
+                self.written = []
+            def write(ft, packet, addr=None):
+                ft.written.append(packet)
+                if addr[0] == "127.0.0.1":
+                    self.eventQueue.addTask(self.proxyTransport.datagramReceived,
+                                      packet, ("10.0.0.1", 5060))
+                elif addr[0] == "10.0.0.1":
+                    self.eventQueue.addTask(self.clientTransport.datagramReceived,
+                                            packet, ("127.0.0.1", 5060))
+        fdt = FakeDatagramTransport()
+        self.clientTransport.transport = fdt
+        self.proxyTransport.transport = fdt
+        self.registrationClient._lookupURI = self.proxy._lookupURI = lambda uri: defer.succeed([(testurls.get(uri.host, uri.host), 5060)])
+
+
+    def tearDown(self):
+        def reallyCleanUp(x):
+            self.proxyTransport.stopTransport(True)
+            self.clientTransport.stopTransport(True)
+        return self.eventQueue.uponCompletion().addCallback(reallyCleanUp)
+    def testSuccessfulRegistration(self):
+        d = self.registrationClient.register("joe", "passXword", "proxy.com")
+        def checkRegistrarBindings(_):
+            self.assertEquals(self.proxy.portal.realm.regs, 1)
+        d.addCallback(checkRegistrarBindings)
+        return d
+

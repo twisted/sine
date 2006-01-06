@@ -1,5 +1,5 @@
+# -*- test-case-name: sine.test -*-
 # Copyright 2005 Divmod, Inc.  See LICENSE file for details
-# -*- test-case-name: sine.test.test_terminator -*-
 
 # "I have always wished that my computer would be as easy to use as my
 # telephone. My wish has come true. I no longer know how to use my
@@ -19,8 +19,10 @@ from zope.interface import  Interface, implements
 
 from axiom.userbase  import Preauthenticated
 
-from epsilon.modal import mode, ModalType
+from epsilon.modal import mode, Modal
 
+from urllib2 import parse_http_list
+from xshtoom import digestauth
 debuggingEnabled=0
 
 def debug(txt):
@@ -945,10 +947,54 @@ T1 = 0.5
 T2 = 4
 T4 = 5
 
-class ClientInviteTransaction(object):
-    __metaclass__ = ModalType
+class AbstractTransaction(Modal):
+    def stopTransaction(self, hard):
+        self.transitionTo('terminated')
+
+class AbstractClientTransaction(AbstractTransaction):
+    terminationHook = None
+    def stopTransaction(self, hard):
+        if self.response is None:
+            # the transaction is stopping for server maintenance, we need to
+            # select a response if we haven't gotten one
+            self.response = responseFromRequest(503, self.request)
+        return super(AbstractClientTransaction, self).stopTransaction(hard)
+
+    def uponTerminationDo(self, f, *args, **kwargs):
+        self.terminationHook = (f, args, kwargs)
+
+    def transportError(self, err):
+        self.tu.transportError(self, err)
+        self.transitionTo('terminated')
+
+    class terminated(mode):
+        def __enter__(self):
+            if self.terminationHook:
+                #rockin' it 1.5.2 style
+                apply(apply, self.terminationHook)
+            debug("%s %s transitioning to 'terminated'" % (self.__class__.__name__, self.peer))
+            #XXX brutal
+            for k, v in self.transport.clientTransactions.iteritems():
+                if v == self:
+                    del self.transport.clientTransactions[k]
+                    break
+            self.tu.clientTransactionTerminated(self)
+
+        def messageReceived(self, msg):
+            pass
+
+        def __exit__(self):
+            raise RuntimeError, "can't unterminate a transaction"
+
+        def cancel(self):
+            pass
+
+
+
+class ClientInviteTransaction(AbstractClientTransaction):
     initialMode = 'calling'
-    modeAttribute = 'mode'
+
+    terminated = AbstractClientTransaction.terminated
 
     def __init__(self, transport, tu, invite, peerURL):
         self.transport = transport
@@ -959,19 +1005,10 @@ class ClientInviteTransaction(object):
         self.waitingToCancel = False
         self.branch = computeBranch(invite)
         self.transport.clientTransactions[self.branch] = self
-        self.start()
-
-    def transitionTo(self, stateName):
-        self.end()
-        self.mode = stateName
-        self.start()
+        self.__enter__()
 
     def sendInvite(self):
         self.transport.sendRequest(self.request, self.peer)
-
-    def transportError(self, err):
-        self.tu.transportError(self, err)
-        self.transitionTo('terminated')
 
 
     def ack(self, msg):
@@ -1003,7 +1040,7 @@ class ClientInviteTransaction(object):
 
     class calling(mode):
 
-        def start(self):
+        def __enter__(self):
             debug("ClientInvite %s transitioning to 'calling'" % (self.peer,))
             self.timerATries = 0
 
@@ -1031,7 +1068,7 @@ class ClientInviteTransaction(object):
                 self.transitionTo('completed')
 
 
-        def end(self):
+        def __exit__(self):
             if self.timerA.active():
                 self.timerA.cancel()
             if self.timerB.active():
@@ -1048,7 +1085,7 @@ class ClientInviteTransaction(object):
             self.waitingToCancel = True
 
     class proceeding(mode):
-        def start(self):
+        def __enter__(self):
             debug("ClientInvite %s transitioning to 'proceeding'" % (self.peer,))
 
         def messageReceived(self, msg):
@@ -1062,15 +1099,15 @@ class ClientInviteTransaction(object):
                 self.ack(msg)
                 self.transitionTo('completed')
 
-        def end(self):
+        def __exit__(self):
             if self.timerB.active():
                 self.timerB.cancel()
+
 
         def cancel(self):
             self.sendCancel()
             #not exactly timer B but it oughta ba
             self.timerB = reactor.callLater(64*T1, self.cancel)
-
 
 
         def timeout(self):
@@ -1082,7 +1119,7 @@ class ClientInviteTransaction(object):
 
     class completed(mode):
 
-        def start(self):
+        def __enter__(self):
             debug("ClientInvite %s transitioning to 'completed'" % (self.peer,))
             self.timerD = reactor.callLater(32, self.transitionTo,
                                             'terminated')
@@ -1091,39 +1128,18 @@ class ClientInviteTransaction(object):
             if 300 <= msg.code:
                 self.ack(msg)
 
-        def end(self):
+        def __exit__(self):
             if self.timerD.active():
                 self.timerD.cancel()
 
         def cancel(self):
             pass
 
-    class terminated(mode):
-
-        def start(self):
-            debug("ClientInvite %s transitioning to 'terminated'" % (self.peer,))
-            #XXX brutal
-            for k, v in self.transport.clientTransactions.iteritems():
-                if v == self:
-                    del self.transport.clientTransactions[k]
-                    break
-            self.tu.clientTransactionTerminated(self)
-
-        def messageReceived(self, msg):
-            pass
-
-        def end(self):
-            raise RuntimeError, "can't unterminate a transaction"
-
-        def cancel(self):
-            pass
-
-
-
-class ClientTransaction(object):
-    __metaclass__ = ModalType
+class ClientTransaction(AbstractClientTransaction):
     initialMode = 'trying'
-    modeAttribute = 'mode'
+
+    terminated = AbstractClientTransaction.terminated
+
     def __init__(self, transport, tu, request, peerURL):
         self.tu = tu
         self.transport = transport
@@ -1132,23 +1148,14 @@ class ClientTransaction(object):
         self.response = None
         branch = computeBranch(request)
         self.transport.clientTransactions[branch] = self
-        self.start()
-
-    def transitionTo(self, stateName):
-        self.end()
-        self.mode = stateName
-        self.start()
-
-    def transportError(self, err):
-        self.tu.transportError(self, err)
-        self.transitionTo('terminated')
+        self.__enter__()
 
     def sendRequest(self):
         self.transport.sendRequest(self.request, self.peer)
 
     class trying(mode):
 
-        def start(self):
+        def __enter__(self):
             debug("Client %s transitioning to 'trying'" % (self.peer,))
             self.timerETries = 0
             def timerERetry():
@@ -1156,9 +1163,10 @@ class ClientTransaction(object):
                 self.sendRequest()
                 self.timerE = reactor.callLater(min((2**self.timerETries)*T1, T2),
                                   timerERetry)
-            timerERetry()
+            self.timerE = reactor.callLater(T1, timerERetry)
             self.timerF = reactor.callLater(64*T1, self.transitionTo, 'terminated')
-
+            self.sendRequest()
+            
         def messageReceived(self, msg):
             if 200 <= msg.code:
                 self.response = msg
@@ -1168,7 +1176,7 @@ class ClientTransaction(object):
             self.tu.responseReceived(msg, self)
 
 
-        def end(self):
+        def __exit__(self):
             if self.timerE.active():
                 self.timerE.cancel()
             if self.timerF.active():
@@ -1176,14 +1184,13 @@ class ClientTransaction(object):
 
     class proceeding(mode):
 
-        def start(self):
+        def __enter__(self):
             debug("Client %s transitioning to 'proceeding'" % (self.peer,))
-            self.timerETries = 0
             def timerERetry():
                 self.timerETries += 1
                 self.sendRequest()
-                reactor.callLater(T2, timerERetry)
-            timerERetry()
+                self.timerE = reactor.callLater(T2, timerERetry)
+            self.timerE = reactor.callLater(T1, timerERetry)
             self.timerF = reactor.callLater(64*T1, self.transitionTo, 'terminated')
 
         def messageReceived(self, msg):
@@ -1192,7 +1199,7 @@ class ClientTransaction(object):
                 self.response = msg
             self.tu.responseReceived(msg, self)
 
-        def end(self):
+        def __exit__(self):
             if self.timerE.active():
                 self.timerE.cancel()
             if self.timerF.active():
@@ -1200,7 +1207,7 @@ class ClientTransaction(object):
 
     class completed(mode):
 
-        def start(self):
+        def __enter__(self):
             debug("Client %s transitioning to 'completed'" % (self.peer,))
             self.timerK = reactor.callLater(T4, self.transitionTo,
                                             'terminated')
@@ -1211,31 +1218,14 @@ class ClientTransaction(object):
             retransmissions that may be received (which is why the client
             transaction remains there only for unreliable transports).
             """
-        def end(self):
+        def __exit__(self):
             if self.timerK.active():
                 self.timerK.cancel()
 
 
-    class terminated(mode):
-        def start(self):
-            debug("Client %s transitioning to 'terminated'" % (self.peer,))
-            #XXX brutal
-            for k, v in self.transport.clientTransactions.iteritems():
-                if v == self:
-                    del self.transport.clientTransactions[k]
-                    break
-            self.tu.clientTransactionTerminated(self)
+class ServerInviteTransaction(AbstractTransaction):
 
-        def messageReceived(self, msg):
-            pass
-
-        def end(self):
-            raise RuntimeError("can't unterminate a transaction")
-
-class ServerInviteTransaction(object):
-    __metaclass__ = ModalType
     initialMode = 'proceeding'
-    modeAttribute = 'mode'
 
     def __init__(self, transport, tu, message, peerURL):
         self.message = message
@@ -1246,11 +1236,6 @@ class ServerInviteTransaction(object):
 
     def sentFinalResponse(self):
         return self.lastResponse.code >= 200
-
-    def transitionTo(self, stateName):
-        self.end()
-        self.mode = stateName
-        self.start()
 
     def send100(self, msg):
         self.sendResponse(responseFromRequest(100, msg))
@@ -1264,10 +1249,10 @@ class ServerInviteTransaction(object):
 
     class proceeding(mode):
 
-        def start(self):
+        def __enter__(self):
             debug("ServerInvite %s transitioning to 'proceeding'" % (self.peer,))
 
-        def end(self):
+        def __exit__(self):
             pass
 
         def messageReceived(self, msg):
@@ -1284,7 +1269,7 @@ class ServerInviteTransaction(object):
 
     class completed(mode):
 
-        def start(self):
+        def __enter__(self):
             debug("ServerInvite %s transitioning to 'completed'" % (self.peer,))
             self.timerGTries = 1
             def timerGRetry():
@@ -1306,7 +1291,7 @@ class ServerInviteTransaction(object):
         def messageReceivedFromTU(self, msg):
             pass
 
-        def end(self):
+        def __exit__(self):
             if self.timerG.active():
                 self.timerG.cancel()
             if self.timerH.active():
@@ -1315,7 +1300,7 @@ class ServerInviteTransaction(object):
 
     class confirmed(mode):
 
-        def start(self):
+        def __enter__(self):
             debug("ServerInvite %s transitioning to 'confirmed'" % (self.peer,))
             self.timerI = reactor.callLater(T4, self.transitionTo,
                                             'terminated')
@@ -1326,13 +1311,14 @@ class ServerInviteTransaction(object):
         def messageReceivedFromTU(self, msg):
             pass
 
-        def end(self):
-            pass
+        def __exit__(self):
+            if self.timerI.active():
+                self.timerI.cancel()
 
 
     class terminated(mode):
 
-        def start(self):
+        def __enter__(self):
             debug("ServerInvite %s transitioning to 'terminated'" % (self.peer,))
             self.transport.serverTransactionTerminated(self)
 
@@ -1342,15 +1328,13 @@ class ServerInviteTransaction(object):
         def messageReceivedFromTU(self, msg):
             pass
 
-        def end(self):
+        def __exit__(self):
             pass
 
 
 
-class ServerTransaction(object):
-    __metaclass__ = ModalType
+class ServerTransaction(AbstractTransaction):
     initialMode = 'trying'
-    modeAttribute = 'mode'
 
     def __init__(self, transport, tu, message, peerURL):
         self.message = message
@@ -1358,11 +1342,6 @@ class ServerTransaction(object):
         self.tu = tu
         self.peer = peerURL
         self.lastResponse = None
-
-    def transitionTo(self, stateName):
-        self.end()
-        self.mode = stateName
-        self.start()
 
     def repeatLastResponse(self):
         self.transport.sendResponse(self.lastResponse)
@@ -1373,7 +1352,7 @@ class ServerTransaction(object):
 
     class trying(mode):
 
-        def start(self):
+        def __enter__(self):
             debug("Server %s transitioning to 'trying'" % (self.peer,))
 
         def messageReceived(self, msg):
@@ -1386,12 +1365,12 @@ class ServerTransaction(object):
             else:
                 self.transitionTo('completed')
 
-        def end(self):
+        def __exit__(self):
             pass
 
     class proceeding(mode):
 
-        def start(self):
+        def __enter__(self):
             debug("Server %s transitioning to 'proceeding'" % (self.peer,))
 
         def messageReceived(self, msg):
@@ -1403,12 +1382,12 @@ class ServerTransaction(object):
                 self.transitionTo('completed')
 
 
-        def end(self):
+        def __exit__(self):
             pass
 
     class completed(mode):
 
-        def start(self):
+        def __enter__(self):
             debug("Server %s transitioning to 'completed'" % (self.peer,))
             self.timerJ = reactor.callLater(64*T1,
                                             self.transitionTo, 'terminated')
@@ -1419,14 +1398,14 @@ class ServerTransaction(object):
         def messageReceivedFromTU(self, msg):
             pass
 
-        def end(self):
+        def __exit__(self):
             if self.timerJ.active():
                 self.timerJ.cancel()
 
 
     class terminated(mode):
 
-        def start(self):
+        def __enter__(self):
             debug("Server %s transitioning to 'terminated'" % (self.peer,))
             self.transport.serverTransactionTerminated(self)
 
@@ -1436,7 +1415,7 @@ class ServerTransaction(object):
         def messageReceivedFromTU(self, msg):
             pass
 
-        def end(self):
+        def __exit__(self):
             pass
 
 
@@ -1466,6 +1445,37 @@ class SIPTransport(protocol.DatagramProtocol):
         self.serverTransactions = {}
         self.clientTransactions = {}
         tu.start(self)
+
+    def stopTransport(self, hard=False):
+        d1 = self.tu.stopTransactionUser(hard)
+        def stopRemainingTransactions(tuStopResult):
+            """
+            Stop any transactions that remain after the TU's
+            stopTransactionUser method has completed shutting the TU down.
+
+            Ideally, we shouldn't have any transactions left by the time the TU
+            is fully done shutting down.  However, the proxy isn't currently
+            tracking dialog state and therefore has no way to send BYEs
+            properly.
+
+            Eventually this should be implemented because it is necessary to
+            correctly terminate calls upon shutdown; i.e. a Divmod user is
+            placing a call through Teliax ans Quotient needs to restart; the
+            ideal behavior in this case is to play a brief sound apologizing to
+            the user, then terminate the call.  The alternative is that we lose
+            track of the transaction and end up letting a billed call go on
+            forever without any accounting associated with it.
+            """
+            deferreds = []
+            for ctx in self.clientTransactions.values():
+                dn = ctx.stopTransaction(hard)
+            for stx in self.serverTransactions.values():
+                dn = stx.stopTransaction(hard)
+                #deferreds.append(dn)
+
+                #deferreds.append(dn)
+            return defer.DeferredList(deferreds)
+        return d1.addBoth(stopRemainingTransactions)
 
     def addMessage(self, msg):
         self.messages.append(msg)
@@ -1569,6 +1579,7 @@ class SIPTransport(protocol.DatagramProtocol):
 
         #CANCEL & ACK requires the same Via branch as the thing it is
         #cancelling/acking so it has to be added by the txn
+        #if msg.method == "REGISTER": import pdb; pdb.set_trace()
         if msg.method not in ("ACK", "CANCEL"):
             #raaaaa this is so we don't add the same via header on resends
             msg = msg.copy()
@@ -1715,13 +1726,22 @@ class Proxy(SIPResolverMixin):
         self.responseContexts = {}
         self.finalResponses = {}
         self.registrar = Registrar(portal)
+        self.registrationClient = None
+
+    def installRegistrationClient(self, rc):
+        self.registrationClient = rc
 
     def start(self, transport):
         self.domains = [transport.host]
         self.transport = transport
         self.registrar.start(transport)
+        if self.registrationClient:
+            self.registrationClient.start(transport)
         self.recordroute = URL(host=transport.host,
                                port=transport.port, other={'lr':''})
+
+    def stopTransactionUser(self, hard):
+        return defer.succeed(True)
 
     def requestReceived(self, msg, addr):
         #RFC 3261 16.4
@@ -1785,7 +1805,7 @@ class Proxy(SIPResolverMixin):
                                             branch=computeBranch(msg)).toString())
             self.proxyRequestStatelessly(msg)
             return None
-        else:            
+        else:
             st = ServerTransaction(self.transport, self, msg, addr)
             _cb(None, st)
 
@@ -1856,7 +1876,7 @@ class Proxy(SIPResolverMixin):
                 timerC = reactor.callLater(181, ct.timeout)
             else:
                 ct = ClientTransaction(self.transport, self, msg, address)
-                timerC=None
+                timerC = None
 
             self.responseContexts[ct] = (st, timerC)
             self.responseContexts.setdefault(st, []).append(ct)
@@ -1979,12 +1999,11 @@ class Proxy(SIPResolverMixin):
             #RFC 3261 16.7.7
             authHeaders = {}
             for code, ct in responses:
-                if code == 401:
+               if code == 401:
                     finalResponse.headers['www-authenticate'].extend(
                         ct.response.headers.get("www-authenticate", []))
 
-
-                elif code == 407:
+               elif code == 407:
                     finalResponse.headers['proxy-authenticate'].extend(
                         ct.response.headers.get("proxy-authenticate",[]))
                     finalResponse.code = 407
@@ -2000,6 +2019,8 @@ class Proxy(SIPResolverMixin):
         msg.headers['via'] = msg.headers['via'][1:]
 
         if len(msg.headers['via']) == 0:
+            if msg.headers['cseq'][0].endswith('REGISTER'):
+                self.registrationClient.responseReceived(msg, ct)
             if not msg.headers['cseq'][0].endswith('CANCEL'):
                 #ignore CANCEL/200s, process the rest
                 self.processLocalResponse(msg, ct)
@@ -2023,7 +2044,7 @@ class Proxy(SIPResolverMixin):
         #TODO: Catch 3xx responses, add their redirects to the target set
         if 200 <= msg.code < 300:
             self.finalResponses[st] = msg
-            reactor.callLater(0, self.cancelPendingClients, st)
+            ct.uponTerminationDo(self.cancelPendingClients, st)
             if isinstance(ct, ClientInviteTransaction):
                 self.trackSession(msg)
         elif 600 <= msg.code:
@@ -2036,7 +2057,7 @@ class Proxy(SIPResolverMixin):
 
     def processLocalResponse(self, msg, ct):
         debug("Unhandled local SIP message: %s" % (msg,))
-        
+
     def cancelPendingClients(self, st):
         if isinstance(st, ServerInviteTransaction):
             cts = self.responseContexts.get(st, [])
@@ -2059,23 +2080,6 @@ class Registrar:
 
     def start(self, transport):
         self.transport = transport
-
-    def getRegistrationInfo(self, url):
-        #I bet nobody calls this!
-        import pdb; pdb.set_trace()
-        #XXX Need to think about impact of all these cred lookups in a
-        #cluster environment
-        def _cbRegInfo((i,a,l)):
-            return a.getRegistrationInfo("__registrar__")
-        def _ebRegInfo(failure):
-            failure.trap(UnauthorizedLogin)
-            return None
-        return self.portal.login(Preauthenticated('%s@%s' % (url.username,
-                                                            url.host)),
-                                 None, IContact).addCallback(
-            _cbRegInfo).addErrback(
-            _ebRegInfo)
-
 
     def requestReceived(self, msg, addr):
         st = ServerTransaction(self.transport, self, msg, addr)
@@ -2190,7 +2194,150 @@ class Registrar:
             m.headers.setdefault('www-authenticate', []).append(value)
         return m
 
+class RegistrationClient(SIPResolverMixin):
+    implements(ITransactionUser)
+    nonce_count = 1
+    cseq = random.randint(1E4,1E5)
+    def __init__(self):
+        self.pendingRegistrations = []
 
+    def start(self, transport):
+        self.transport = transport
+        self.ongoingRegistrations = {}
+        self.completedRegistrations = {}
+        if self.pendingRegistrations:
+             regs = self.pendingRegistrations
+             self.pendingRegistrations = []
+             for f, domain in regs:
+                 self._lookupURI(domain).addCallback(f)
+
+    def stopTransactionUser(self, hard=False):
+        return defer.succeed(True)
+    
+    def register(self, username, password, domain):
+        self.callid = "%s@%s" % (md5.md5(str(random.random())).hexdigest(),
+                                 domain)
+        uri = URL(domain, username)
+        r = self._makeRegisterMessage(self.callid, domain, uri, uri)
+
+        finalD = defer.Deferred()
+        def sendit(dests):
+            debug("Registration client sending initial REGISTER to %s at %s" % (domain, dests))
+            ct = ClientTransaction(self.transport, self, r, dests[0])
+            self.ongoingRegistrations[ct] = (finalD, password, domain, uri, 0)
+        if hasattr(self, 'transport'):
+            d = self._lookupURI(URL(domain))
+            d.addCallback(sendit)
+        else:
+            self.pendingRegistrations.append((sendit, URL(domain)))
+        return finalD
+
+    def _makeRegisterMessage(self, callid, domain, uri, contacturi):
+        r = Request("REGISTER", URL(domain))
+        r.addHeader("to", formatAddress(uri))
+        r.addHeader("from", formatAddress(uri))
+        r.addHeader("contact", formatAddress(contacturi))
+        r.addHeader("call-id", callid)
+
+
+        r.addHeader("cseq", "%s REGISTER" % self.cseq)
+        self.cseq += 1
+        r.addHeader("user-agent", "Divmod Sine")
+        r.addHeader("expires", 3600)
+        return r
+
+
+    def _getHashingImplementation(self, algorithm):
+        #from shtoom.sip
+        import md5, sha
+        if algorithm.lower() == 'md5':
+            H = lambda x: md5.new(x).hexdigest()
+        elif algorithm.lower() == 'sha':
+            H = lambda x: sha.new(x).hexdigest()
+        # XXX MD5-sess
+        KD = lambda s, d, H=H: H("%s:%s" % (s, d))
+        return H, KD
+
+    def calcAuth(self, method, uri, authchal, cred):
+        #from shtoom.sip
+        if not cred:
+            raise RuntimeError, "Auth required, but not provided?"
+        (user, passwd) = cred
+        authmethod, auth = authchal.split(' ', 1)
+        if authmethod.lower() != 'digest':
+            raise ValueError, "Unknown auth method %s"%(authmethod)
+        chal = digestauth.parse_keqv_list(parse_http_list(auth))
+        qop = chal.get('qop', None)
+        if qop and qop.lower() != 'auth':
+            raise ValueError, "can't handle qop '%s'"%(qop)
+        realm = chal.get('realm')
+        algorithm = chal.get('algorithm', 'md5')
+        nonce = chal.get('nonce')
+        opaque = chal.get('opaque')
+        H, KD = self._getHashingImplementation(algorithm)
+        if user is None or passwd is None:
+            raise RuntimeError, "Auth required, %s %s"%(user,passwd)
+        A1 = '%s:%s:%s'%(user, chal['realm'], passwd)
+        A2 = '%s:%s'%(method, uri)
+        if qop is not None:
+            self.nonce_count += 1
+            ncvalue = '%08x'%(self.nonce_count)
+            cnonce = digestauth.generate_nonce(bits=16,
+                                           randomness=
+                                              str(nonce)+str(self.nonce_count))
+            # XXX nonce isn't there for proxy-auth. :-(
+            noncebit =  "%s:%s:%s:%s:%s" % (nonce,ncvalue,cnonce,qop,H(A2))
+            respdig = KD(H(A1), noncebit)
+        else:
+            noncebit =  "%s:%s" % (nonce,H(A2))
+            respdig = KD(H(A1), noncebit)
+        base = '%s username="%s",realm="%s",nonce="%s",' \
+               'response="%s",uri="%s"' % (authmethod, user, realm, nonce,
+                                  respdig, uri)
+        if opaque:
+            base = base + ', opaque="%s"' % opaque
+        if algorithm.lower() != 'md5':
+            base = base + ', algorithm="%s"' % algorithm
+        if qop:
+            base = base + ', qop=auth, nc=%s, cnonce="%s"'%(ncvalue, cnonce)
+        return base
+
+    def responseReceived(self, response, ct=None):
+
+        if ct in self.ongoingRegistrations:
+            finalD, passwd, domain, contact, count = self.ongoingRegistrations[ct]
+            if response.code == 200:
+                log.msg("Successfully registered with %s" % (domain,))
+                finalD.callback(True)
+                del self.ongoingRegistrations[ct]
+                return
+
+            uri = parseAddress(response.headers['to'][0])
+            r = self._makeRegisterMessage(response.headers['call-id'][0],
+                                     domain,
+                                     uri,
+                                     contact)
+            if response.code == 401:
+                chal = response.headers.get("www-authenticate")[0]
+                auth = self.calcAuth("REGISTER", uri=URL(domain).toString(), authchal=chal,
+                                     cred=(uri[1].username, passwd))
+                r.addHeader("authorization", auth)
+                d = self._lookupURI(URL(domain))
+                def sendit(dests):
+                    debug("ROAR. RESEND #%s" % count) 
+                    del self.ongoingRegistrations[ct]
+                    if count > 5:
+                        # We've resent enough times.  Not again.  XXX TODO: in
+                        # the 'Pro' version, we will want to errback something
+                        # here.
+                        return
+                    newct = ClientTransaction(self.transport, self, r, dests[0])
+                    self.ongoingRegistrations[newct] = (finalD, passwd, domain, uri, count+1)
+                d.addCallback(sendit)
+
+    def clientTransactionTerminated(self, ct):
+        if ct in self.ongoingRegistrations:
+            del self.ongoingRegistrations[ct]
 
 class IVoiceSystem(Interface):
     """
@@ -2225,6 +2372,8 @@ class SIPDispatcher:
         @param default: an ITransactionUser (generally a SIP Proxy) to
         be used in the event that a message cannot be dispatched via
         the C{portal} argument.
+
+        @param registration
         """
         self.clientTransactions = {}
         self.temporaryProcessors = {}   # map sip.URL.toCredString() to
@@ -2246,7 +2395,7 @@ class SIPDispatcher:
             st = ServerTransaction(self.transport, self, msg, addr)
         st.messageReceivedFromTU(responseFromRequest(errcode, msg))
         return st
-        
+
     def requestReceived(self, msg, addr):
         """
         Implements L{ITransactionUser.requestReceived}.
@@ -2256,7 +2405,7 @@ class SIPDispatcher:
         if dialog:
             #XXX needs error handling
             dialog.tu.requestReceived(msg, addr)
-        else:            
+        else:
             return self.lookupProcessor(msg).addCallback(
                 lambda p: p.requestReceived(msg, addr)
                 ).addErrback(self.errorMessage,msg, addr)
@@ -2284,7 +2433,7 @@ class SIPDispatcher:
 
     def installTemporaryProcessor(self, uri, processor):
         self.temporaryProcessors[uri] = processor
-        
+
     def lookupProcessor(self, msg):
         """
         Return a Deferred which fires an ITransactionUser provider
@@ -2322,7 +2471,7 @@ class SIPDispatcher:
             p.transport = self.transport
             return p
         ## These may be useful for something but not 3PCC
-        
+
         #if fromURL in self.temporaryProcessors:
         #    return defer.succeed(self.temporaryProcessors[fromURL])
         #if toURL in self.temporaryProcessors:
@@ -2336,3 +2485,4 @@ class SIPDispatcher:
             gotVoiceSystem
             ).addCallback(
             gotProcessor)
+

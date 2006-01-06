@@ -81,7 +81,7 @@ class Dialog:
 
     forClient = classmethod(forClient)
     routeSet = None
-    
+
     def __init__(self, tu, contactURI):
         self.tu = tu
         self.contactURI = contactURI
@@ -93,11 +93,27 @@ class Dialog:
         #UAC bits
         self.clientState = "early"
         self.sessionDescription = None
+        self.ackTimer = [0, None]
+
+
     def _finishInit(self):
         self.callID = self.msg.headers['call-id'][0]
         toAddress = parseAddress(self.msg.headers['to'][0])
         fromAddress = parseAddress(self.msg.headers['from'][0])
         return toAddress, fromAddress
+
+    def ackTimerRetry(self, msg):
+        timer, tries = self.ackTimer
+        if tries > 10:
+            #more than 64**T1 seconds since we've heard from the other end
+            #so say bye and give up
+            self.sendBye()
+            return
+        if tries > 0:
+            self.tu.transport.sendResponse(msg)
+        self.ackTimer = (reactor.callLater(min((2**tries)*T1, T2),
+                                           self.ackTimerRetry, msg),
+                         tries+1)
 
     def getDialogID(self):
         return (self.callID,
@@ -302,6 +318,8 @@ class Dialog:
         self.rtp.timeouterLoop.stop()
         self.callController.callEnded(self)
 
+
+
 def upgradeSDP(currentSession, newSDP):
     "Read the media description from the new SDP and update the current session by removing the current media."
     
@@ -412,9 +430,19 @@ class UserAgent(SIPResolverMixin):
             self.dialogs = dialogs
         self.cts = {}
         self.host = localHost
+        self.shutdownDeferred = None
 
     def start(self, transport):
         self.transport = transport
+
+    def stopTransactionUser(self, hard=False):
+        for d in self.dialogs.values():
+            if hard:
+                d.end()
+            else:
+                d.sendBye()
+        self.shutdownDeferred = defer.Deferred()
+        return self.shutdownDeferred
 
     def maybeStartAudio(self, dialog, sdp):
         """
@@ -452,20 +480,6 @@ class UserAgent(SIPResolverMixin):
         else:
             return defer.maybeDeferred(m, st, msg, addr, dialog).addCallback(
                 lambda x: st)
-
-    def ackTimerRetry(self, dialog,  msg):
-        timer, tries = dialog.ackTimer
-        if tries > 10:
-            #more than 64**T1 seconds since we've heard from the other end
-            #so say bye and give up
-            dialog.sendBye()
-            return
-        if tries > 0:
-            self.transport.sendResponse(msg)
-        dialog.ackTimer = (reactor.callLater(min((2**tries)*T1, T2),
-                                             self.ackTimerRetry,
-                                             dialog, msg),
-                           tries+1)
 
     def process_INVITE(self, st, msg, addr, dialog):
         #RFC 3261 13.3.1
@@ -660,9 +674,11 @@ class UserAgent(SIPResolverMixin):
     def clientTransactionTerminated(self, ct):
         if ct not in self.cts:
             return
-        dialog = self.cts[ct]
+        dialog = self.cts.pop(ct)
         if dialog.clientState != "confirmed":
             self.responseReceived(ct.response)
+        if self.shutdownDeferred and not self.cts:
+            self.shutdownDeferred.callback(True)
 
     def incomingRTP(self, dialog, packet):
         from xshtoom.rtp.formats import PT_NTE

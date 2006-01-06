@@ -22,14 +22,17 @@ class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
          "Domain this registrar is authoritative for;\
          i.e., the domain local users belong to."),
         ('port', 'p', '5060',
-         'Port to listen on for SIP.')
+         'Port to listen on for SIP.'),
+        ('pstn', None, '',
+         'SIP URL that PSTN calls should be directed to.' ),
         ]
 
     def postOptions(self):
         s = self.parent.getStore()
         svc = s.findOrCreate(sipserver.SIPServer,
                        portno=int(self['port']),
-                       hostnames=self['domain'])
+                       hostnames=self['domain'],
+                       pstn=self['pstn'])
         svc.installOn(s)
 
         s.findOrCreate(scheduler.Scheduler).installOn(s)
@@ -40,8 +43,8 @@ class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
         else:
             website.WebSite(
                 store=s,
-                portNumber=8080,
-                securePortNumber=8443,
+                portNumber=8081,
+                securePortNumber=8444,
                 certificateFile='server.pem').installOn(s)
             if not os.path.exists('server.pem'):
                 certcreate.main([])
@@ -107,7 +110,25 @@ class AddUser(usage.Options, axiomatic.AxiomaticSubCommandMixin):
             raise usage.UsageError("An account by that name already exists.")
 
 
+class Register(usage.Options, axiomatic.AxiomaticSubCommandMixin):
+    "Add an account on another host for the proxy to register with on startup."
 
+    longdesc = __doc__
+    synopsis = "<username> <domain> [password]"
+
+    def parseArgs(self, username, domain, password=None):
+        self['username'] = self.decodeCommandLine(username)
+        self['domain'] = self.decodeCommandLine(domain)
+        self['password'] = password
+
+    def postOptions(self):
+        s = self.parent.getStore()
+        srv = s.findUnique(sipserver.SIPServer)
+        if not self['username'] and self['domain']:
+            raise usage.UsageError("Both a username and domain are required")
+        r = sipserver.Registration(store=s,username=self['username'], password=unicode(self['password']), 
+                               domain=self['domain'], parent=srv)
+        print vars(r)
 
 class SIPProxyConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
     classProvides(plugin.IPlugin, iaxiom.IAxiomaticCommand)
@@ -121,7 +142,9 @@ class SIPProxyConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
         ('ticket-signup-url', None, 'signup', 'URL at which to place a ticket request page')]
 
     subCommands = [('install', None, Install, "Install SIP Proxy components"),
-                   ('adduser', None, AddUser, "Add a SIP user")]
+                   ('adduser', None, AddUser, "Add a SIP user"),
+                   ('register', None, Register, "Register with an external SIP registrar")
+                  ] 
     didSomething = False
 
     def getStore(self):

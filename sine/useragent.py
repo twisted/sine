@@ -1,3 +1,5 @@
+# -*- test-case-name: sine.test -*-
+
 from xshtoom.sdp import SDP
 from xshtoom.rtp.protocol import RTPProtocol
 from xshtoom.audio.converters import Codecker, PT_PCMU
@@ -93,7 +95,7 @@ class Dialog:
         #UAC bits
         self.clientState = "early"
         self.sessionDescription = None
-        self.ackTimer = [0, None]
+        self.ackTimer = [None, 0]
 
 
     def _finishInit(self):
@@ -505,8 +507,7 @@ class UserAgent(SIPResolverMixin):
                 dialog.remoteAddress = parseAddress(msg.headers['from'][0])
                 response = dialog.responseFromRequest(200, msg, mysdp.show())
                 st.messageReceivedFromTU(response)
-                dialog.ackTimer = [None, 0]
-                self.ackTimerRetry(dialog, response)
+                dialog.ackTimerRetry(response)
 
             return st
         #otherwise, time to start a new dialog
@@ -536,8 +537,7 @@ class UserAgent(SIPResolverMixin):
             response = dialog.responseFromRequest(200, msg, mysdp.show())
             st.messageReceivedFromTU(response)
 
-            dialog.ackTimer = [None, 0]
-            self.ackTimerRetry(dialog, response)
+            dialog.ackTimerRetry(response)
 
         def failedLookup(err):
             err.trap(NoSuchUser, UnauthorizedLogin)

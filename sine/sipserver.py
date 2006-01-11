@@ -66,7 +66,7 @@ class SIPServer(Item, Service):
                 if not (reg.username and reg.domain):
                     raise SIPConfigurationError("Bad registration URL:", "You need both a username and a domain to register")
                 rc.register(reg.username, reg.password, reg.domain)
-
+                self.proxy.addProxyAuthentication(reg.username, reg.domain, reg.password)
         f = sip.SIPTransport(self.proxy, self.hostnames.split(','), self.portno)
 
         self.port = reactor.listenUDP(self.portno, f)
@@ -230,11 +230,12 @@ class TrivialContact(Item, InstallableMixin):
         return [(physicalURL, self.expiryTime)]
 
     def unregisterAddress(self, physicalURL):
-        if self.physicalURL != physicalURL:
+        storedURL = sip.parseURL(self.physicalURL)
+        if storedURL != physicalURL:
             raise ValueError, "what"
         self.physicalURL = None
         return [(physicalURL, 0)]
-    def getRegistrationInfo(self):
+    def getRegistrationInfo(self, caller):
         registered = False
         if self.physicalURL is not None:
             now = time.time()

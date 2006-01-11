@@ -128,6 +128,7 @@ class Register(usage.Options, axiomatic.AxiomaticSubCommandMixin):
             raise usage.UsageError("Both a username and domain are required")
         r = sipserver.Registration(store=s,username=self['username'], password=unicode(self['password']), 
                                domain=self['domain'], parent=srv)
+        print vars(r)
 
 class SIPProxyConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
     classProvides(plugin.IPlugin, iaxiom.IAxiomaticCommand)

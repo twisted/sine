@@ -137,6 +137,7 @@ class CallTerminateTest(FakeClockTestCase):
         self.uas = useragent.UserAgent.server(sip.IVoiceSystem(us), "127.0.0.2")
         self.sent = []
         self.sip = sip.SIPTransport(self.uas, ["server.com"], 5060)
+        self.sip.startProtocol()
         self.sip.sendMessage = lambda dest, msg: self.sent.append((dest, msg))
         self.testMessages = []
         self.parser = sip.MessagesParser(self.testMessages.append)
@@ -197,6 +198,8 @@ class CallTerminateTest(FakeClockTestCase):
                 #convert to strings for easy reading of output
                 self.assertEqual([x.toString() for x in firstvia],
                                  [x.toString() for x in firstvia])
+            elif header == "content-length":
+                continue
             else:
                 self.assertEqual([str(x) for x in first.headers[header]],
                                  [str(x) for x in second.headers[header]])

@@ -498,7 +498,7 @@ class TaskQueue(object):
 
     def uponCompletion(self):
         if self.later is None:
-            return defer.succeed()
+            return defer.succeed(True)
         self.flushd = defer.Deferred()
         return self.flushd
 
@@ -531,6 +531,7 @@ class ProxyTestCase(FakeClockTestCase):
         self.proxy = sip.Proxy(p)
         self.sent = []
         self.sip = sip.SIPTransport(self.proxy, ["proxy1.org"], 5060)
+        self.sip.startProtocol()
         self.proxy._lookupURI = lambda uri: defer.succeed([(testurls.get(uri.host, uri.host), 5060)])
         self.sip.sendMessage = lambda dest, msg: self.sent.append((dest, msg))
 
@@ -603,6 +604,7 @@ class RegistrationTestCase(FakeClockTestCase):
         self.proxy = sip.Proxy(self.portal)
         self.transport = sip.SIPTransport(self.proxy,
                                           ["proxy.com",'127.0.0.1'], 5060)
+        self.transport.startProtocol()
         self.sent = []
         self.proxy._lookupURI = lambda uri: [(uri.host, uri.port)]
         def sm(msg, dest):
@@ -903,6 +905,7 @@ class AuthorizationTestCase(FakeClockTestCase):
         self.proxy = sip.Proxy(p)
         self.siptransport = sip.SIPTransport(self.proxy,
                                              ["intarweb.us"], 5060)
+        self.siptransport.startProtocol()
         reg = self.proxy.registrar
         reg.authorizers = reg.authorizers.copy()
         reg.authorizers['digest'] = FakeDigestAuthorizer()
@@ -1381,7 +1384,10 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
         self.testMessages = []
         self.parser = sip.MessagesParser(self.testMessages.append)
         self.eventQueue = TaskQueue()
-        
+
+        self.sip1.startProtocol()
+        self.sip2.startProtocol()
+
         class FakeDatagramTransport1:
             def __init__(self):
                 self.written = []
@@ -1534,10 +1540,10 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
         self.assertEquals(len(self.proxy1SendQueue), 2)
         #This order is opposite from RFC3665's diagram
         #there, the ACK is sent before the 487. I don't know if this matters.
-        self.assertMsgEqual(self.proxy2SendQueue[0], interproxy487)
-        self.assertMsgEqual(self.proxy2SendQueue[1], bob487Ack)
-        self.assertMsgEqual(self.proxy1SendQueue[0], alice487)
-        self.assertMsgEqual(self.proxy1SendQueue[1], interproxy487Ack)
+        self.assertMsgEqual(self.proxy2SendQueue[0], bob487Ack)
+        self.assertMsgEqual(self.proxy2SendQueue[1], interproxy487)
+        self.assertMsgEqual(self.proxy1SendQueue[0], interproxy487Ack)
+        self.assertMsgEqual(self.proxy1SendQueue[1], alice487)
         self.resetq()
         self.sip1.datagramReceived(alice487Ack, ('10.0.0.1', 5060))
         self.assertEquals(len(self.proxy1SendQueue), 0)
@@ -1573,6 +1579,8 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
         reactor.iterate()
         self.resetq()
 
+
+
 class RegistrationClientTestCase(FakeClockTestCase):
     def setUp(self):
         self.realm = TestRealm("proxy.com")
@@ -1590,8 +1598,9 @@ class RegistrationClientTestCase(FakeClockTestCase):
         self.registrationClient = sip.RegistrationClient()
         self.clientTransport = sip.SIPTransport(self.registrationClient,
                                                 ["client.com","10.0.0.1"], 5060)
-
         self.eventQueue = TaskQueue()
+        self.clientTransport.startProtocol()
+        self.proxyTransport.startProtocol()
 
         class FakeDatagramTransport:
             def __init__(self):

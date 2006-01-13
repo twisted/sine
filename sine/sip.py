@@ -175,6 +175,45 @@ def DigestCalcResponse(
     hash = m.digest().encode('hex')
     return hash
 
+def respondToAuthChallenge(response, authdict, header):
+    #XXX does not handle qop/cnonce properly. Fortunately Asterisk doesn't care...
+    method = response.headers['cseq'][0].split(' ')[1]
+
+    authmethod, auth = response.headers[header][0].split(' ', 1)
+    if authmethod.lower() != 'digest':
+        raise ValueError, "Unknown auth method %s"%(authmethod)
+    chal = digestauth.parse_keqv_list(parse_http_list(auth))
+    algo = chal.get("algorithm", "md5")
+    realm, nonce, cnonce, nc, qop, opaque, uri = [chal.get(x, "")
+                                             for x in ("realm", "nonce", "cnonce",
+                                                       "nc", "qop", "opaque",
+                                                       "uri")]
+    if realm == "asterisk":
+        #haha we're doomed, this is not a unique realm name so there's
+        #no way to really decide what creds to send
+        vs = authdict.items()
+        if not vs:
+            return None
+        log.msg("XXX Proxy-auth request did not include a unique realm, sending creds for %s" % vs[0][0])
+        user, passwd = vs[0][1]
+    else:
+        user, passwd = authdict.get(realm, (None, None))
+    if not user:
+        #nothing we can do, no auth provided
+        return None
+    digest = DigestCalcResponse(
+        DigestCalcHA1(algo, user, realm, passwd, nonce, cnonce),
+        nonce, nc, cnonce, qop, method, uri, None)
+    response = algo + " " + ','.join(['%s="%s"'% (k,v) for (k,v) in zip(('username','realm','nonce',
+                                                       'response','uri','opaque',
+                                                       'algorithm', 'qop', 'nc',
+                                                       'cnonce'),
+                                                      (user, realm, nonce, digest,
+                                                       uri, opaque, algo, qop,
+                                                       nc, cnonce))
+                             if v])
+    return response
+
 class Via:
     """A SIP Via header."""
 
@@ -501,7 +540,6 @@ class Message:
 
     def _getHeaderLine(self):
         raise NotImplementedError
-
 
 class Request(Message):
     """A Request for a URI"""
@@ -1055,17 +1093,22 @@ class ClientInviteTransaction(AbstractClientTransaction):
 
         def messageReceived(self, msg):
             self.response = msg
-            self.tu.responseReceived(msg,self)
+
             if 100 <= msg.code < 200:
+                self.tu.responseReceived(msg,self)
                 if self.waitingToCancel:
                     self.sendCancel()
                     return
                 self.transitionTo('proceeding')
             elif 200 <= msg.code < 300:
+                self.tu.responseReceived(msg,self)
                 self.transitionTo('terminated')
             elif 300 <= msg.code < 700:
+                #XXX important! if ack is not sent first,
+                #non-monotonic sequence numbers could occur
                 self.ack(msg)
                 self.transitionTo('completed')
+                self.tu.responseReceived(msg,self)
 
 
         def __exit__(self):
@@ -1090,15 +1133,19 @@ class ClientInviteTransaction(AbstractClientTransaction):
 
         def messageReceived(self, msg):
             self.response = msg
-            self.tu.responseReceived(msg, self)
+
             if 100 <= msg.code < 200:
-                pass
+                self.tu.responseReceived(msg, self)
             elif 200 <= msg.code < 300:
+                self.tu.responseReceived(msg, self)
                 self.transitionTo('terminated')
             elif 300 <= msg.code < 700:
+                #XXX also important
+
                 self.ack(msg)
                 self.transitionTo('completed')
-
+                self.tu.responseReceived(msg, self)
+                
         def __exit__(self):
             if self.timerB.active():
                 self.timerB.cancel()
@@ -1166,7 +1213,7 @@ class ClientTransaction(AbstractClientTransaction):
             self.timerE = reactor.callLater(T1, timerERetry)
             self.timerF = reactor.callLater(64*T1, self.transitionTo, 'terminated')
             self.sendRequest()
-            
+
         def messageReceived(self, msg):
             if 200 <= msg.code:
                 self.response = msg
@@ -1444,7 +1491,11 @@ class SIPTransport(protocol.DatagramProtocol):
         self.port = port
         self.serverTransactions = {}
         self.clientTransactions = {}
-        tu.start(self)
+
+    def startProtocol(self):
+        #doing this here instead of in __init__ in case anything wants
+        #to wait until we can actually send packets to start
+        self.tu.start(self)
 
     def stopTransport(self, hard=False):
         d1 = self.tu.stopTransactionUser(hard)
@@ -1579,7 +1630,7 @@ class SIPTransport(protocol.DatagramProtocol):
 
         #CANCEL & ACK requires the same Via branch as the thing it is
         #cancelling/acking so it has to be added by the txn
-        #if msg.method == "REGISTER": import pdb; pdb.set_trace()
+
         if msg.method not in ("ACK", "CANCEL"):
             #raaaaa this is so we don't add the same via header on resends
             msg = msg.copy()
@@ -1727,9 +1778,13 @@ class Proxy(SIPResolverMixin):
         self.finalResponses = {}
         self.registrar = Registrar(portal)
         self.registrationClient = None
-
+        self.proxyAuthorizations = {}
+        self.authRetries = {}
     def installRegistrationClient(self, rc):
         self.registrationClient = rc
+
+    def addProxyAuthentication(self, user, domain, passwd):
+        self.proxyAuthorizations[domain] = (user, passwd)
 
     def start(self, transport):
         self.domains = [transport.host]
@@ -1763,6 +1818,14 @@ class Proxy(SIPResolverMixin):
                 st.messageReceivedFromTU(responseFromRequest(200, msg))
                 return st
 
+        #teliax is kinda weird and sends an OPTIONS request to the url we register as
+
+        if (msg.uri.host in self.proxyAuthorizations and
+            msg.uri.username == self.proxyAuthorizations[msg.uri.host][0] and
+            msg.method == 'OPTIONS'):
+            st = ServerTransaction(self.transport, self, msg, addr)
+            st.messageReceivedFromTU(responseFromRequest(200, msg))
+            return st
 
         def _cb(x, st):
             fromURL = parseAddress(msg.headers['from'][0])[1]
@@ -1939,38 +2002,65 @@ class Proxy(SIPResolverMixin):
 
 
     def clientTransactionTerminated(self, ct):
-        st = self.responseContexts[ct]
+        st = self.responseContexts.get(ct)
+        if not st:
+            #whoops, someone got here before we did
+            return
         #XXX kluge?
         if not isinstance(st, ServerTransaction):
             st, timerC = st
         else:
             timerC = None
+        self.checkForFinalResponse(st, timerC)
+
+    def checkForFinalResponse(self, st, timerC):
         cts = self.responseContexts[st]
         for ct in cts:
-            if ct.mode != "terminated":
+            #Are there any unterminated transactions?
+            if ct.mode not in ("terminated", "completed"):
+                #Come back later, then.
                 break
         else:
-
             if not self.finalResponses.get(st, None):
+                # All the client transactions associated with this
+                # server transaction have terminated without a
+                # successful response. Time to choose one.
                 response = self.chooseFinalResponse(st)
                 self.finalResponses[st] = response
                 st.messageReceivedFromTU(response)
+
+            #All the CTs are dead. Clean up this ST/CT set.
             del self.responseContexts[st]
             if timerC: timerC.cancel()
             for ct in cts:
                 del self.responseContexts[ct]
 
 
+    def retryWithProxyAuth(self, st, response, target):
+        message = st.message.copy()
+        auth = respondToAuthChallenge(response, self.proxyAuthorizations, 'proxy-authenticate')
+        if not auth:
+            #we're doomed, give up
+            return None
+        message.addHeader("proxy-authorization", auth)
+        #gotta increment the CSeq or Asterisk will have a cow
+        cseq, cmethod =  message.headers['cseq'][0].split(' ')
+        message.headers['cseq'] = ["%s %s" % (int(cseq)+1, cmethod)]
+        self._forward([target], message, st)
 
     def chooseFinalResponse(self, st):
         cts = self.responseContexts[st]
         noResponses = True
         responses = [(ct.response and ct.response.code, ct) for ct in cts]
+
+        #Sanity checking code. I believe this /actually/ works now,
+        #but leaving it in just in case...
         for code, ct in responses:
             if code is not None and code >= 200:
                 noResponses = False
                 break
         assert not noResponses, "BROKEN. chooseFinalResponse was called before any final responses occurred."
+
 
         prioritizedResponses = []
         for code, ct in responses:
@@ -2000,62 +2090,124 @@ class Proxy(SIPResolverMixin):
             authHeaders = {}
             for code, ct in responses:
                if code == 401:
-                    finalResponse.headers['www-authenticate'].extend(
-                        ct.response.headers.get("www-authenticate", []))
+                   finalResponse.headers['www-authenticate'].extend(
+                       ct.response.headers.get("www-authenticate", []))
 
                elif code == 407:
-                    finalResponse.headers['proxy-authenticate'].extend(
-                        ct.response.headers.get("proxy-authenticate",[]))
-                    finalResponse.code = 407
+                   finalResponse.headers['proxy-authenticate'].extend(
+                       ct.response.headers.get("proxy-authenticate",[]))
+                   finalResponse.code = 407
         return finalResponse
-
 
 
     def responseReceived(self, msg, ct=None):
         #RFC 3261 16.7
+
         if msg.code == 100:
             return
         via = msg.headers['via'][0]
         msg.headers['via'] = msg.headers['via'][1:]
 
         if len(msg.headers['via']) == 0:
+            # No via headers left?  We have nowhere else to send this
+            # response - it must be a response to something local to
+            # this process.
             if msg.headers['cseq'][0].endswith('REGISTER'):
+                # It's a REGISTER, which means our registration client
+                # must have sent it.  Relay the registration response
+                # to it, it knows how to handle it.
                 self.registrationClient.responseReceived(msg, ct)
             if not msg.headers['cseq'][0].endswith('CANCEL'):
+                # Some, uh, other element locally sent this.  We
+                # probably don't know how to handle it, so forward it
+                # to the method which allows subclassers to pluggably
+                # act upon responses to messages they originate...
+
                 #ignore CANCEL/200s, process the rest
                 self.processLocalResponse(msg, ct)
             return
-        if (not ct and msg.headers['cseq'][0].endswith('INVITE')
-            and 200 <= msg.code < 300):
+
+        if not ct:
+            # There's no client transaction, which means we don't know
+            # anything about the request that this response is being
+            # sent to.  The RFC says in section 16.7 that we must
+            # proxy this statelessly.
             self.transport.sendResponse(msg)
             return
-        else:
-            st, timerC = self.responseContexts.get(ct, (None, None))
-            if not st:
-                #staaaaateless
-                self.transport.sendResponse(msg)
 
-        if 100 < msg.code < 200:
-            if isinstance(ct, ClientInviteTransaction):
-                timerC.reset(181)
-            st.messageReceivedFromTU(msg)
+        st, timerC = self.responseContexts.get(ct, (None, None))
+        if not st:
+            # Similarly, if there is no server transaction associated
+            # with this client transaction, we also must statelessly
+            # proxy.
+            self.transport.sendResponse(msg)
             return
 
+        # At this point we have both a client transaction and a server
+        # transaction.  (neither st nor ct is None) *we know about
+        # this response*.  Hooray!  Now, what to do?
+
+        if 100 < msg.code < 200:
+            # 1xx responses (ringing, "session progress", etc).  That
+            # means that the recipient of the message is making
+            # progress: reset the timer so that we will continue to
+            # know about this transaction in the future.
+            if isinstance(ct, ClientInviteTransaction):
+                timerC.reset(181)
         #TODO: Catch 3xx responses, add their redirects to the target set
-        if 200 <= msg.code < 300:
+        elif 200 <= msg.code < 300:
+            # 2xx (200 "success", 201 "success w/ cheese") - game
+            # over, we are done with this request.
             self.finalResponses[st] = msg
+            # we have to wait for the transaction to terminate before
+            # cancelling other pending clients, otherwise it will
+            # cancel itself because we do the actual handling in
+            # messageReceivedFromTU.  There may be a better way to
+            # factor this...
             ct.uponTerminationDo(self.cancelPendingClients, st)
             if isinstance(ct, ClientInviteTransaction):
                 self.trackSession(msg)
+
         elif 600 <= msg.code:
+            # 600 - "global failure" - this request will fail
+            # everywhere.  we cancelPendingClients synchronously
+            # because we do want the ST to cancel itself in this case.
             self.cancelPendingClients(st)
+
+        elif msg.code == 407:
+            #oops, last minute save! we might be able to resubmit this
+            #request.
+            self.responseContexts[st].remove(ct)
+            if st not in self.authRetries:
+                self.authRetries[st] = 0
+            if self.authRetries[st] < 3:
+                self.authRetries[st] += 1
+                self.retryWithProxyAuth(st, msg, ct.peer)
+            else:
+                #if we're out of auth retries, handle it like a normal
+                #4xx response...
+                ct.response = msg
+                self.checkForFinalResponse(st, timerC)
+            return
         else:
-            #might as well leave the message there, sans our via header
+            # 3xx, 4xx, 5xx: might as well leave the message there,
+            # sans our via header; we'll decide which one to use in
+            # chooseFinalResponse rather than proxying it immediately.
             ct.response = msg
+
+            self.checkForFinalResponse(st, timerC)
+            return
 
         st.messageReceivedFromTU(msg)
 
     def processLocalResponse(self, msg, ct):
+        """
+        You might want to override this in subclasses of proxy to
+        handle responses to messages that your proxy subclass
+        originates.  It might be a public API one day if we decide
+        there isn't a better way to do this (i.e. use with caution,
+        unstable, etc)
+        """
         debug("Unhandled local SIP message: %s" % (msg,))
 
     def cancelPendingClients(self, st):
@@ -2213,15 +2365,17 @@ class RegistrationClient(SIPResolverMixin):
 
     def stopTransactionUser(self, hard=False):
         return defer.succeed(True)
-    
+
     def register(self, username, password, domain):
         self.callid = "%s@%s" % (md5.md5(str(random.random())).hexdigest(),
                                  domain)
         uri = URL(domain, username)
-        r = self._makeRegisterMessage(self.callid, domain, uri, uri)
+        r = self._makeRegisterMessage(self.callid, domain, uri)
 
         finalD = defer.Deferred()
         def sendit(dests):
+            #Freakin frackin why don't I plan ahead
+            r.addHeader("contact", formatAddress(URL(self.transport.host)))
             debug("Registration client sending initial REGISTER to %s at %s" % (domain, dests))
             ct = ClientTransaction(self.transport, self, r, dests[0])
             self.ongoingRegistrations[ct] = (finalD, password, domain, uri, 0)
@@ -2232,11 +2386,11 @@ class RegistrationClient(SIPResolverMixin):
             self.pendingRegistrations.append((sendit, URL(domain)))
         return finalD
 
-    def _makeRegisterMessage(self, callid, domain, uri, contacturi):
+    def _makeRegisterMessage(self, callid, domain, uri):
         r = Request("REGISTER", URL(domain))
         r.addHeader("to", formatAddress(uri))
         r.addHeader("from", formatAddress(uri))
-        r.addHeader("contact", formatAddress(contacturi))
+
         r.addHeader("call-id", callid)
 
 
@@ -2260,6 +2414,7 @@ class RegistrationClient(SIPResolverMixin):
 
     def calcAuth(self, method, uri, authchal, cred):
         #from shtoom.sip
+        #XXX come on, the digest stuff at the top of the file does most of this
         if not cred:
             raise RuntimeError, "Auth required, but not provided?"
         (user, passwd) = cred
@@ -2315,8 +2470,8 @@ class RegistrationClient(SIPResolverMixin):
             uri = parseAddress(response.headers['to'][0])
             r = self._makeRegisterMessage(response.headers['call-id'][0],
                                      domain,
-                                     uri,
-                                     contact)
+                                     uri)
+            r.addHeader("contact", formatAddress(URL(self.transport.host)))
             if response.code == 401:
                 chal = response.headers.get("www-authenticate")[0]
                 auth = self.calcAuth("REGISTER", uri=URL(domain).toString(), authchal=chal,
@@ -2324,7 +2479,7 @@ class RegistrationClient(SIPResolverMixin):
                 r.addHeader("authorization", auth)
                 d = self._lookupURI(URL(domain))
                 def sendit(dests):
-                    debug("ROAR. RESEND #%s" % count) 
+                    debug("ROAR. RESEND #%s" % count)
                     del self.ongoingRegistrations[ct]
                     if count > 5:
                         # We've resent enough times.  Not again.  XXX TODO: in
@@ -2476,7 +2631,7 @@ class SIPDispatcher:
         #    return defer.succeed(self.temporaryProcessors[fromURL])
         #if toURL in self.temporaryProcessors:
         #    return defer.succeed(self.temporaryProcessors[toURL])
-        
+
         return self.portal.login(
             Preauthenticated(fromURL.toCredString()), None, IVoiceSystem
             ).addErrback(
@@ -2485,4 +2640,3 @@ class SIPDispatcher:
             gotVoiceSystem
             ).addCallback(
             gotProcessor)
-

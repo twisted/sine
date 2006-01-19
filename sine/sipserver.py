@@ -1,16 +1,18 @@
 from twisted.internet import reactor, defer
+from twisted.python.components import registerAdapter
 from twisted.application.service import IService, Service
 from twisted.cred.portal import IRealm, Portal
 from twisted.cred.checkers import ICredentialsChecker
-from twisted.python.components import registerAdapter
-from nevow import livepage, tags
 from axiom import userbase
-from axiom.attributes import integer, inmemory, bytes, text, reference, timestamp
+from axiom.attributes import integer, inmemory, bytes, text, reference, timestamp, AND
 from axiom.item import Item, InstallableMixin
 from axiom.slotmachine import hyper as super
 from epsilon.extime import Time
 from sine import sip, useragent, tpcc
-from xmantissa import ixmantissa, website, webapp, webnav
+from nevow import athena
+from xmantissa import ixmantissa, website, webapp, liveform
+from xmantissa import prefs, webnav, tdb, tdbview
+from xmantissa.webtheme import getLoader
 from zope.interface import implements
 from axiom.errors import NoSuchUser
 
@@ -32,6 +34,7 @@ class SIPServer(Item, Service):
     name = inmemory()
 
     proxy = inmemory()
+    dispatcher = inmemory()
     port = inmemory()
     site = inmemory()
 
@@ -57,6 +60,7 @@ class SIPServer(Item, Service):
         else:
             portal = Portal(realm, [chkr])
         self.proxy = sip.Proxy(portal)
+        self.dispatcher = sip.SIPDispatcher(portal, self.proxy)
         regs = list(self.store.query(Registration, Registration.parent==self))
         if regs:
             rc = sip.RegistrationClient()
@@ -66,9 +70,46 @@ class SIPServer(Item, Service):
                     raise SIPConfigurationError("Bad registration URL:", "You need both a username and a domain to register")
                 rc.register(reg.username, reg.password, reg.domain)
                 self.proxy.addProxyAuthentication(reg.username, reg.domain, reg.password)
-        f = sip.SIPTransport(self.proxy, self.hostnames.split(','), self.portno)
+        f = sip.SIPTransport(self.dispatcher, self.hostnames.split(','), self.portno)
 
         self.port = reactor.listenUDP(self.portno, f)
+
+    def get_hostname(self):
+        return self.hostnames.split(',')[0]
+    hostname = property(get_hostname)
+
+
+    def setupCallBetween(self, partyA, partyB):
+        """
+        Set up a call between party A and party B, and control the
+        signalling for the call.  Either URL may refer to any SIP
+        address, there is no requirement that either participant be
+        registered with this proxy.
+
+        @param partyA: a SIP address (a three-tuple of (name, URL,
+        parameters)) that represents the party initiating the call,
+        i.e. the SIP address of the user who is logged in to the web
+        UI and pushing the button to place the call. (Specifically,
+        this is the user who will be called first and will have to
+        wait for the other user to pick up the call.)
+
+        @param partyB: a SIP address that represents the party receiving
+        the call.
+
+        @return: None
+        """
+        # XXX TODO should probably return a deferred which
+        # fires... something... that would let us take advantage of
+        # the intermediary call signalling, such as ending the call
+        # early...
+        localpart = "clicktocall"
+        host = self.hostnames.split(',')[0]
+        controller = tpcc.ThirdPartyCallController(self.dispatcher, localpart, host, partyA[0], partyB[1])
+        uac = useragent.UserAgent.client(controller, localpart, host, self.dispatcher.dialogs) 
+        uac.transport = self.dispatcher.transport
+        self.dispatcher.installTemporaryProcessor(sip.URL(host, localpart), uac)
+        
+        uac.call(partyA[1])
 
 class Registration(Item):
     typename = "sine_registration"
@@ -78,71 +119,78 @@ class Registration(Item):
     domain = text()
     password = text()
 
-class TrivialRegistrarInitializer(Item, InstallableMixin):
-    """
-    ripoff of ClickChronicleInitializer
-    """
-    implements(ixmantissa.INavigableElement)
+class _LocalpartPreference(prefs.Preference):
+    def __init__(self, value, collection):
+        prefs.Preference.__init__(self, 'localpart', value,
+                                  'Localpart', collection, 'Localpart')
 
-    typeName = 'sipserver_initializer'
+    def choices(self):
+        return None
+
+    def displayToValue(self, display):
+        value = unicode(display)
+        store = self.collection.store.parent
+
+        for loginMethod in store.query(userbase.LoginMethod,
+                                       AND(userbase.LoginMethod.localpart == value,
+                                       userbase.LoginMethod.protocol == u'sip')):
+            raise prefs.PreferenceValidationError('Localpart is not unique')
+        return value
+
+    def valueToDisplay(self, value):
+        return str(value)
+
+    def settable(self):
+        return self.value is None
+
+class SinePreferenceCollection(Item, InstallableMixin):
+
+    implements(ixmantissa.IPreferenceCollection)
+
     schemaVersion = 1
+    typeName = 'sine_preference_collection'
+    name = 'Sine Preferences'
 
     installedOn = reference()
-    domain = text()
+    localpart = text()
+    _cachedPrefs = inmemory()
 
     def installOn(self, other):
-        super(TrivialRegistrarInitializer, self).installOn(other)
-        other.powerUp(self, ixmantissa.INavigableElement)
+        super(SinePreferenceCollection, self).installOn(other)
+        other.powerUp(self, ixmantissa.IPreferenceCollection)
 
-    def getTabs(self):
-        # This won't ever actually show up
-        return [webnav.Tab('Preferences', self.storeID, 1.0)]
+    def activate(self):
+        self._cachedPrefs = {"localpart": _LocalpartPreference(self.localpart, self)}
 
-    def setLocalPartAndPassword(self, localpart, password):
+    def getPreferences(self):
+        return self._cachedPrefs
+
+    def _localpartSet(self):
+        # localpart can only be set once - so we'll create a
+        # LoginMethod the first and only time it's value changes
+
         substore = self.store.parent.getItemByID(self.store.idInParent)
+        hostname = self.store.parent.findUnique(SIPServer).hostname
+
         for acc in self.store.parent.query(userbase.LoginAccount,
                                            userbase.LoginAccount.avatars == substore):
+
             userbase.LoginMethod(store=self.store.parent,
-                                 localpart=unicode(localpart),
-                                 internal=True,
-                                 protocol=u'sip',
-                                 verified=True,
-                                 domain=self.domain,
-                                 account=acc)
-            acc.password = unicode(password)
-            self._reallyEndow()
-            return
+                                localpart=self.localpart,
+                                internal=True,
+                                protocol=u'sip',
+                                verified=True,
+                                domain=unicode(hostname),
+                                account=acc)
+            break
 
-    def _reallyEndow(self):
-        avatar = self.installedOn
-        avatar.findOrCreate(TrivialContact).installOn(avatar)
-        avatar.powerDown(self, ixmantissa.INavigableElement)
-        self.deleteFromStore()
+    def setPreferenceValue(self, pref, value):
+        assert hasattr(self, pref.key)
+        setattr(pref, 'value', value)
+        setattr(self, pref.key, value)
 
-class TrivialRegistrarInitializerPage(website.AxiomFragment):
-    implements(ixmantissa.INavigableFragment)
-    live = True
-    fragmentName = 'trivial_registrar_initializer'
-
-    def __init__(self, original):
-        website.AxiomFragment.__init__(self, original)
-        self.store = original.store
-
-    def handle_setLocalPartAndPassword(self, ctx, localpart, password):
-        for lm in self.original.store.query(userbase.LoginMethod,
-                userbase.LoginMethod.localpart==localpart):
-            return livepage.js.alert('SIP user by that name already exists! Please choose a different username')
-        else:
-            self.original.setLocalPartAndPassword(localpart, password)
-            return livepage.js.alert('OMG! set the local part thing')
-
-    def head(self):
-        return tags.script(src='/static/sine/js/initializer.js',
-                           type='text/javascript')
-
-registerAdapter(TrivialRegistrarInitializerPage,
-                TrivialRegistrarInitializer,
-                ixmantissa.INavigableFragment)
+        if pref.key == 'localpart':
+            self._localpartSet()
 
 class SineBenefactor(Item):
     implements(ixmantissa.IBenefactor)
@@ -155,13 +203,10 @@ class SineBenefactor(Item):
 
     def endow(self, ticket, avatar):
         self.endowed += 1
-        la = avatar.parent.findFirst(
-            userbase.LoginAccount,
-            userbase.LoginAccount.avatars == avatar.parent.getItemByID(avatar.idInParent))
-
         avatar.findOrCreate(website.WebSite).installOn(avatar)
         avatar.findOrCreate(webapp.PrivateApplication).installOn(avatar)
-        avatar.findOrCreate(TrivialRegistrarInitializer, domain=self.domain).installOn(avatar)
+        avatar.findOrCreate(SinePreferenceCollection).installOn(avatar)
+        avatar.findOrCreate(TrivialContact).installOn(avatar)
 
 class PSTNContact:
     implements(sip.IContact)
@@ -210,17 +255,19 @@ class PSTNPortalWrapper:
         return D
 
 class TrivialContact(Item, InstallableMixin):
-    implements(sip.IContact)
+    implements(sip.IContact, ixmantissa.INavigableElement)
 
     typeName = "sine_trivialcontact"
     schemaVersion = 1
 
     physicalURL = bytes()
+    altcontact = bytes()
     expiryTime = timestamp()
     installedOn = reference()
 
     def installOn(self, other):
         super(TrivialContact, self).installOn(other)
+        other.powerUp(self, ixmantissa.INavigableElement)
         other.powerUp(self, sip.IContact)
 
     def registerAddress(self, physicalURL, expiryTime):
@@ -234,6 +281,7 @@ class TrivialContact(Item, InstallableMixin):
             raise ValueError, "what"
         self.physicalURL = None
         return [(physicalURL, 0)]
+
     def getRegistrationInfo(self, caller):
         registered = False
         if self.physicalURL is not None:
@@ -242,15 +290,96 @@ class TrivialContact(Item, InstallableMixin):
                 registered = True
         if registered:
             return [(sip.parseURL(self.physicalURL), int(self.expiryTime.asPOSIXTimestamp() - now))]
+        elif self.altcontact:
+            return [(sip.parseURL(self.altcontact), -1)]
         else:
             return defer.fail(sip.RegistrationError(480))
 
+    def placeCall(self, target):
+        svc = self.store.parent.findUnique(SIPServer)
+        svc.setupCallBetween(("", self.getRegistrationInfo(target)[0][0], {}),
+                             ("", target, {}))
+    
     def callIncoming(self, name, uri, caller):
         Call(store=self.store, name=name, time=Time(), uri=unicode(str(uri)), kind=u'from')
 
     def callOutgoing(self, name, uri):
         Call(store=self.store, name=name, time=Time(), uri=unicode(str(uri)), kind=u'to')
 
+    def getTabs(self):
+        return [webnav.Tab('Voice', self.storeID, 0.0)]
+
+class TrivialContactFragment(athena.LiveFragment):
+    implements(ixmantissa.INavigableFragment)
+
+    fragmentName = 'trivial-contact'
+    live = 'athena'
+    title = ''
+
+    def data_physicalURL(self, ctx, data):
+        return self.original.physicalURL or self.original.altcontact or 'Unregistered'
+
+    def data_expiryTime(self, ctx, data):
+        expiryTime = self.original.expiryTime
+        if expiryTime is not None and expiryTime != -1:
+            return expiryTime.asHumanly()
+        return 'No Expiry'
+
+    def render_callTDB(self, ctx, data):
+        prefs = ixmantissa.IPreferenceAggregator(self.original.store)
+
+        tdm = tdb.TabularDataModel(self.original.store,
+                                   Call, (Call.time, Call.uri, Call.kind),
+                                   itemsPerPage=prefs.getPreferenceValue('itemsPerPage'))
+
+        cviews = (tdbview.DateColumnView('time'),
+                  tdbview.ColumnViewBase('uri'),
+                  tdbview.ColumnViewBase('kind'))
+
+        tdv = tdbview.TabularDataView(tdm, cviews, width='100%')
+        tdv.docFactory = getLoader(tdv.fragmentName)
+        tdv.setFragmentParent(self)
+        return tdv
+
+    def render_altcontactForm(self, ctx, data):
+        lf = liveform.LiveForm(self.setAltContact, [liveform.Parameter(
+        "altcontact", liveform.TEXT_INPUT, self.parseURLorPhoneNum, "An alternate SIP URL or phone number to forward calls to when you are not registered", "")], "Set")
+        lf.setFragmentParent(self)
+        return lf
+
+    def render_placeCall(self, ctx, data):
+        lf = liveform.LiveForm(self.original.placeCall, [liveform.Parameter(
+            "target", liveform.TEXT_INPUT, self.parseURLorPhoneNum, "Place call:")])
+        lf.setFragmentParent(self)
+        return lf
+        
+    def parseURLorPhoneNum(self, val):
+        pstn = self.original.store.parent.findUnique(SIPServer).pstn
+        if '@' in val:
+            if not val.startswith("sip:"):
+                val = "sip:" + val
+            return sip.parseURL(val)
+        elif pstn:            
+            pstnurl = sip.parseURL(pstn)
+            num = ''.join([c for c in val if c.isdigit()])
+            pstn = self.original.store.parent.findUnique(SIPServer).pstn            
+            if len(num) == 10:
+                return sip.URL(host=pstnurl.host, username="1"+num, port=pstnurl.port)
+            elif len(num) == 11 and num[0] == '1':
+                return sip.URL(host=pstnurl.host, username=num, port=pstnurl.port)
+            else:
+                raise liveform.InvalidInput("Please enter a SIP URL or a North American ten-digit phone number.")
+        else:
+            raise liveform.InvalidInput("Please enter a SIP URL.")
+        
+    def setAltContact(self, altcontact):
+        self.original.altcontact = str(altcontact)
+
+    def head(self):
+        return None
+
+    
+registerAdapter(TrivialContactFragment, TrivialContact, ixmantissa.INavigableFragment)
 
 class SIPDispatcherService(Item, Service):
     typeName = 'sine_sipdispatcher_service'

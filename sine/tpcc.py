@@ -103,7 +103,7 @@ class ThirdPartyCallController:
         self.partyB = partyB
         self.reinvited = False
     def callBegan(self, dialog):
-        d1 = dialog.playFile(soundFile("tt-weasels"))
+        d1 = dialog.playFile(soundFile("transfer"))
         uac2 = UserAgentB(dialog, self.localpart, self.host, self.dispatcher.dialogs)
         uac2.transport = self.dispatcher.transport
         uac2._doCall(self.partyB, noSDP=True, fromName=self.fromName)

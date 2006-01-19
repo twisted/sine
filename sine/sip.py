@@ -5,7 +5,7 @@
 # telephone. My wish has come true. I no longer know how to use my
 # telephone." - Bjarne Stroustrup
 
-import socket, random, md5, sys, urllib
+import socket, random, md5, sys, urllib, itertools
 
 from twisted.python import log, util
 from twisted.internet import protocol, defer, reactor, abstract
@@ -410,6 +410,7 @@ def cleanRequestURL(url):
     url.maddr = None
     url.ttl = None
     url.headers = {}
+
 
 
 def parseAddress(address, host=None, port=None, clean=0):
@@ -1511,7 +1512,7 @@ class SIPTransport(protocol.DatagramProtocol):
 
             Eventually this should be implemented because it is necessary to
             correctly terminate calls upon shutdown; i.e. a Divmod user is
-            placing a call through Teliax ans Quotient needs to restart; the
+            placing a call through Teliax and Quotient needs to restart; the
             ideal behavior in this case is to play a brief sound apologizing to
             the user, then terminate the call.  The alternative is that we lose
             track of the transaction and end up letting a billed call go on
@@ -1890,8 +1891,7 @@ class Proxy(SIPResolverMixin):
         def lookedUpSuccessful((ifac, contact, logout)):
             return defer.maybeDeferred(contact.getRegistrationInfo,
                                        caller
-                                       ).addCallback(
-                lambda x: [i[0] for i in x])
+                                       ).addCallback( lambda x: [i[0] for i in x])
         def failedLookup(err):
             e = err.trap(UnauthorizedLogin)
             if addr.host not in self.domains:
@@ -2597,12 +2597,13 @@ class SIPDispatcher:
         """
         fromURL = parseAddress(msg.headers['from'][0])[1]
         toURL = parseAddress(msg.headers['to'][0])[1]
+
         def noSuchUser(err):
-            err.trap(UnauthorizedLogin)
+            err.trap(NotImplementedError, UnauthorizedLogin)
             # This call is not coming from anyone we know; let's see
             # if it's going *to* anyone we know.
             def _handleBogusLogin(innerErr):
-                innerErr.trap(UnauthorizedLogin)
+                innerErr.trap(NotImplementedError, UnauthorizedLogin)
             return self.portal.login(
                 Preauthenticated(toURL.toCredString()), None, IVoiceSystem
                 ).addErrback(_handleBogusLogin)

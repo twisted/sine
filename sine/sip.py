@@ -5,7 +5,7 @@
 # telephone. My wish has come true. I no longer know how to use my
 # telephone." - Bjarne Stroustrup
 
-import socket, random, md5, sys, urllib, itertools
+import socket, random, md5, sys, urllib
 
 from twisted.python import log, util
 from twisted.internet import protocol, defer, reactor, abstract
@@ -2608,24 +2608,22 @@ class SIPDispatcher:
                 Preauthenticated(toURL.toCredString()), None, IVoiceSystem
                 ).addErrback(_handleBogusLogin)
 
-        def gotProcessor(proc):
-            if proc is None:
-                return self.default
-            return proc
-
         def gotVoiceSystem(x):
             if x is None:
                 # no such user, punt
                 return self.default
             (i, vs, l) = x
-            p = vs.lookupProcessor(msg, self.dialogs)
-            if p is None:
-                # if the voicesystem did not want to handle this
-                # request, we hand off to the default
-                debug("woop no handler for %s,%s" % (fromURL, toURL))
-                return self.default
-            p.transport = self.transport
-            return p
+            d = defer.maybeDeferred(vs.lookupProcessor, msg, self.dialogs)
+            def checkProcessor(p):
+                if p is None:
+                    # if the voicesystem did not want to handle this
+                    # request, we hand off to the default
+                    debug("woop no handler for %s,%s" % (fromURL, toURL))
+                    return self.default
+                p.transport = self.transport
+                return p
+            d.addCallback(checkProcessor)
+            return d
         ## These may be useful for something but not 3PCC
 
         #if fromURL in self.temporaryProcessors:
@@ -2638,6 +2636,4 @@ class SIPDispatcher:
             ).addErrback(
             noSuchUser
             ).addCallback(
-            gotVoiceSystem
-            ).addCallback(
-            gotProcessor)
+            gotVoiceSystem)

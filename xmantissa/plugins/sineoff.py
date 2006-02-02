@@ -18,9 +18,10 @@ plugin = offering.Offering(
 
     siteRequirements = (
         (userbase.IRealm, userbase.LoginSystem),
-        (None, website.WebSite)),
+        (None, website.WebSite),
+        (None, sipserver.SIPServer)),
 
-    appPowerups = (
+    appPowerups = (sipserver.SinePublicPage,
         ),
 
     benefactorFactories = (sineproxy,)

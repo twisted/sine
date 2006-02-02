@@ -4,18 +4,18 @@ from axiom.item import Item, InstallableMixin
 from axiom.slotmachine import hyper as super
 from xmantissa import website, webapp, ixmantissa
 from zope.interface import implements
-from sine import sip, useragent
-from xshtoom.audio.aufile import GSMReader
-from axiom.attributes import inmemory, reference, integer, text, bytes
-from twisted.internet import reactor, defer
+from sine import sip, useragent, sipserver
+from axiom.attributes import inmemory, reference, integer, text, bytes, timestamp
+from twisted.internet import reactor
+from twisted.python import filepath, log
 from nevow import static
 from epsilon.modal import ModalType, mode
-import tempfile, wave, os
+import wave, os
+from epsilon.extime import Time
 
 ASTERISK_SOUNDS_DIR = "/usr/share/asterisk/sounds"
-
 def soundFile(name):
-    return GSMReader(open(os.path.join(ASTERISK_SOUNDS_DIR, name+".gsm")))
+    return os.path.join(ASTERISK_SOUNDS_DIR, name+".gsm")
 
 class ConfessionBenefactor(Item):
     implements(ixmantissa.IBenefactor)
@@ -49,7 +49,8 @@ class ConfessionDispatcher(Item, InstallableMixin):
         super(ConfessionDispatcher, self).installOn(other)
         other.powerUp(self, sip.IVoiceSystem)
     def activate(self):
-        self.uas = useragent.UserAgent.server(self, self.localHost)
+        svc = self.store.parent.findUnique(sipserver.SIPServer)
+        self.uas = useragent.UserAgent.server(self, self.localHost, svc.mediaController)
 
     def lookupProcessor(self, msg, dialogs):
         #XXX haaaaack
@@ -84,44 +85,50 @@ class ConfessionCall(object):
     initialMode = 'recording'
     modeAttribute = 'mode'
     implements(useragent.ICallController)
-    recordingTarget = None
+    filename = None
     recordingTimer = None
-    temprecording = None
     def __init__(self, avatar, anon=False):
         self.avatar = avatar
         self.anon=anon
 
     def callBegan(self, dialog):
-        def playBeep(_):
-            dialog.playFile(soundFile("beep"))
-        d = dialog.playFile(soundFile("vm-intro")).addCallback(playBeep)
+        def playBeep(r):
+            return dialog.playFile(soundFile("beep"), "gsm")
+        d = dialog.playFile(soundFile("vm-intro"), "gsm").addCallback(playBeep)
         if self.anon:
-            d.addCallback(lambda _: self.beginRecording(dialog.remoteAddress[1].toCredString()))
+            d.addCallback(lambda _: self.beginRecording(dialog, dialog.remoteAddress[1].toCredString()))
         else:
-            d.addCallback(lambda _: self.beginRecording())
+            d.addCallback(lambda _: self.beginRecording(dialog))
+        d.addErrback(lambda e: log.err(e))
 
-    def beginRecording(self, target=None):
+    def beginRecording(self, dialog, target=""):
         if self.anon:
             timeLimit = 45
         else:
             timeLimit = 180
-        self.recordingTarget = TempRecording(target)
-        self.recordingTimer = reactor.callLater(timeLimit, self.endRecording)
+        self.fromAddress = target
+        dir = self.avatar.store.newTemporaryFilePath(target, ".wav")
+        if not os.path.exists(dir.path):
+            os.makedirs(dir.path)
+        self.filename = dir.temporarySibling().path
+        dialog.startRecording(self.filename, format="wav")
 
-    def receivedAudio(self, dialog, bytes):
-        if self.recordingTarget:
-            self.recordingTarget.write(bytes)
+        self.recordingTimer = reactor.callLater(timeLimit, self.endRecording, dialog)
+
+    def saveRecording(self, store):
+        r = Recording(store=store, fromAddress=unicode(self.fromAddress))
+        r.audioFromFile(self.filename)
+        r.installOn(store)
+
 
     def playReviewMessage(self, dialog):
-        dialog.playFile(soundFile("vm-review")).addCallback(
-            lambda _: dialog.playFile(soundFile("vm-star-cancel")))
+        dialog.playFile(soundFile("vm-review"), "gsm").addCallback(
+            lambda x: x['done'] and dialog.playFile(soundFile("vm-star-cancel"), "gsm"))
 
     class recording(mode):
         def receivedDTMF(self, dialog, key):
-            if self.recordingTarget and key == 11:
-                self.temprecordingName = self.recordingTarget.filename
-                r = self.endRecording()
-                self.temprecording = r
+            if self.filename and key == 11:
+                self.endRecording(dialog)
                 self.playReviewMessage(dialog)
                 self.mode = "review"
 
@@ -133,57 +140,46 @@ class ConfessionCall(object):
             #10 - give up
             dialog.stopPlaying()
             if key == 1:
-                 self.temprecording.saveTo(self.avatar.store)
-                 self.temprecording = None
-                 return dialog.playFile(soundFile("auth-thankyou")).addCallback(lambda _: defer.fail(useragent.Hangup()))
+                self.endRecording(dialog)
+                self.saveRecording(self.avatar.store)
+                self.filename = None
+                return dialog.playFile(soundFile("auth-thankyou"), "gsm").addCallback (lambda _: self.hangup(dialog))
 
             elif key == 2:
-                return dialog.playWave(self.temprecordingName).addCallback(lambda _: self.playReviewMessage(dialog))
+                return dialog.playFile(self.filename, "wav").addCallback(lambda _: self.playReviewMessage(dialog))
             elif key == 3:
                 self.mode = "recording"
                 def beginAgain():
-                    dialog.playFile(soundFile("beep"))
-                    self.beginRecording()
+                    dialog.playFile(soundFile("beep"), "gsm")
+                    os.unlink(self.filename)
+                    if self.anon:
+                        self.beginRecording(dialog, dialog.remoteAddress[1].toCredString())
+                    else:
+                        self.beginRecording(dialog)
                 reactor.callLater(0.5, beginAgain)
             elif key == 10:
-                self.temprecording = None
-                self.endRecording()
-                return dialog.playFile(soundFile("vm-goodbye")).addCallback(lambda _: defer.fail(useragent.Hangup()))
+                os.unlink(self.filename)
+                self.filename = None
+                self.endRecording(dialog)
+                return dialog.playFile(soundFile("vm-goodbye"), "gsm").addCallback(lambda _: self.hangup(dialog))
 
+    def hangup(self, dialog):
+        reactor.callLater(0.5, dialog.sendBye)
 
-    def endRecording(self):
+    def endRecording(self, dialog):
         if self.recordingTimer and self.recordingTimer.active():
             self.recordingTimer.cancel()
-        if self.recordingTarget:
-            self.recordingTarget.close()
-            r = self.recordingTarget
-            self.recordingTarget = None
-            return r
+        if self.mode == "recording":
+            dialog.endRecording()
+
 
     def callEnded(self, dialog):
-        r = self.endRecording()
-        if self.temprecording:
-            self.temprecording.saveTo(self.avatar.store)
+        r = self.endRecording(dialog)
+        if self.filename:
+            self.saveRecording(self.avatar.store)
 
 
-class TempRecording:
 
-    def __init__(self, fromAddress):
-        fileno, self.filename = tempfile.mkstemp()
-        self.file = wave.open(os.fdopen(fileno, 'wb'), 'wb')
-        self.file.setparams((1,2,8000,0,'NONE','NONE'))
-        self.fromAddress = fromAddress
-
-    def write(self, bytes):
-        self.file.writeframes(bytes)
-
-    def close(self):
-        self.file.close()
-
-    def saveTo(self, store):
-        r = Recording(store=store, fromAddress=unicode(self.fromAddress))
-        r.audioFromFile(self.filename)
-        r.installOn(store)
 
 
 class Recording(Item, website.PrefixURLMixin):
@@ -193,13 +189,18 @@ class Recording(Item, website.PrefixURLMixin):
     prefixURL = text()
     length = integer() #seconds in recording
     fromAddress = text()
+    time = timestamp()
+
+    sessioned = True
+    sessionless = False
 
     def __init__(self, **args):
         super(Recording, self).__init__(**args)
+        self.time = Time()
 
     def installOn(self, other):
         #XXX is this bad? I don't know anymore
-        self.prefixURL = unicode("recordings/" + str(self.storeID))
+        self.prefixURL = unicode("private/recordings/%s.wav" % str(self.storeID))
         super(Recording, self).installOn(other)
     def getFile(self):
         dir = self.store.newDirectory("recordings")
@@ -211,15 +212,13 @@ class Recording(Item, website.PrefixURLMixin):
 
     def audioFromFile(self, filename):
         f = self.file.path
-        import shutil
-        #don't hate me, exarkun
-        shutil.move(filename, f)
+        filepath.FilePath(filename).moveTo(self.file)
         w = wave.open(f)
         self.length = w.getnframes() / w.getframerate()
         w.close()
 
     def createResource(self):
-        return static.Data(self.file, 'audio/x-wav')
+        return static.File(self.file.path)
 
 
 

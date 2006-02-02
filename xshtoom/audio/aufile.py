@@ -83,6 +83,9 @@ class BaseWriter:
 
     def close(self):
         self.fp.close()
+    def getName(self):
+        return self.fp.name
+    name = property(getName)
 
 class WavWriter(BaseWriter):
     module = wave

@@ -3,23 +3,305 @@
 from xshtoom.sdp import SDP
 from xshtoom.rtp.protocol import RTPProtocol
 from xshtoom.audio.converters import Codecker, PT_PCMU
-from xshtoom.audio.aufile import WavReader
+from xshtoom.rtp.formats import PT_NTE
+from xshtoom.audio.aufile import WavReader, GSMReader, WavWriter
 from sine.sip import responseFromRequest, parseAddress, formatAddress
 from sine.sip import Response, Request, URL, T1, T2, SIPError, Via, debug
 from sine.sip import ClientTransaction, ServerTransaction, SIPLookupError
 from sine.sip import ITransactionUser, SIPResolverMixin, ServerInviteTransaction
 from sine.sip import ClientInviteTransaction, computeBranch
-from twisted.internet import reactor, defer, task
+from twisted.internet import reactor, defer, task, protocol, stdio
+from twisted.application.service import Service
 from twisted.cred.error import UnauthorizedLogin
+from twisted.python import log
 from axiom.errors import NoSuchUser
-import random, wave, md5
+from epsilon import process
+import random, wave, md5, textwrap
 from zope.interface import Interface, implements
+from vertex import juice
 
 class Hangup(Exception):
     """
     Raise this in ITransactionUser.receivedAudio or .receivedDTMF to
     end the call.
     """
+
+class RTPTransceiverSubprocess(Service):
+
+    subprogram = textwrap.dedent("""
+    import sine.useragent as ua
+    ua.MediaServer().startService()
+    from twisted.internet import reactor
+    from twisted.python import log
+    log.startLogging(file('rtp-transceiver.log', 'a'))
+    reactor.run()
+    """)
+
+    def startService(self):
+        self.juice = LocalControlProtocol(False)
+        self.protocol = MediaConnector(self.juice)
+        self.process = process.spawnPythonProcess(
+            self.protocol,
+            ("media connector", "-c", self.subprogram),
+            packages=('twisted', 'epsilon', 'vertex', 'sine', 'axiom'))
+
+
+    def stopService(self):
+        self.process.signalProcess('INT')
+
+    def getRTP(self):
+        return self.protocol.juice
+
+class MediaConnector(protocol.ProcessProtocol):
+
+    def __init__(self, proto):
+        self.juice = proto
+
+    def connectionMade(self):
+        log.msg("Media server started.")
+        self.juice.makeConnection(self)
+
+    # Transport
+    disconnecting = False
+
+    def write(self, data):
+        self.transport.write(data)
+
+    def writeSequence(self, data):
+        self.transport.writeSequence(data)
+
+    def loseConnection(self):
+        self.transport.loseConnection()
+
+    def getPeer(self):
+        return ('omfg what are you talking about',)
+
+    def getHost(self):
+        return ('seriously it is a process this makes no sense',)
+
+    def inConnectionLost(self):
+        protocol.ProcessProtocol.inConnectionLost(self)
+
+    def outConnectionLost(self):
+        self.juice.connectionLost(None)
+        protocol.ProcessProtocol.outConnectionLost(self)
+
+    def errConnectionLost(self):
+        protocol.ProcessProtocol.errConnectionLost(self)
+
+    def outReceived(self, data):
+        self.juice.dataReceived(data)
+
+    def errReceived(self, data):
+        log.msg("Received stderr from media server: " + repr(data))
+
+    def processEnded(self, status):
+        # Process termination is meaningless to Juice; outConnectionLost
+        # is what means we can't communicate any longer.
+        pass
+
+class StartRecording(juice.Command):
+    commandName = 'Start-Recording'
+    arguments = [('cookie', juice.String()), ('filename', juice.String()), ("format", juice.String())]
+
+class StopRecording(juice.Command):
+    commandName = "Stop-Recording"
+    arguments = [('cookie', juice.String())]
+    response = []
+
+class PlayFile(juice.Command):
+    commandName = "Play-File"
+    arguments = [('cookie', juice.String()), ("filename", juice.String()), ("format", juice.String(optional=True))]
+    response = [("done", juice.Boolean())]
+
+class StopPlaying(juice.Command):
+    commandName = "Stop-Playing"
+    arguments = [('cookie', juice.String())]
+
+class CreateRTPSocket(juice.Command):
+    commandName= "Create-RTPSocket"
+    arguments = [("host", juice.String())]
+    response = [('cookie', juice.String())]
+
+class GetSDP(juice.Command):
+    commandName = "Get-SDP"
+    arguments = [('cookie', juice.String()), ("othersdp", juice.String())]
+    response = [('sdp', juice.String())]
+
+class RTPStop(juice.Command):
+    commandName = "Stop"
+    arguments = [('cookie', juice.String())]
+
+class RTPStart(juice.Command):
+    commandName = "Start"
+    arguments = [('cookie', juice.String()), ("targethost", juice.String()), ("targetport", juice.Integer())]
+
+class DTMF(juice.Command):
+    commandName = "DTMF"
+    arguments = [('cookie', juice.String()), ("key", juice.Integer())]
+
+class LocalControlProtocol(juice.Juice):
+    #runs in main process
+    def __init__(self, *args, **kwargs):
+        juice.Juice.__init__(self, *args, **kwargs)
+        self.dialogs = {}
+        self.cookies = {}
+    def command_DTMF(self, cookie, key):
+        dialog = self.dialogs[cookie]
+        dialog.callController.receivedDTMF(dialog, key)
+        return {}
+
+    command_DTMF.command = DTMF
+
+    def createRTPSocket(self, dialog, host):
+        d = CreateRTPSocket(host=host).do(self)
+        def remember(response):
+            cookie = response['cookie']
+            self.dialogs[cookie] = dialog
+            self.cookies[dialog] = cookie
+            return cookie
+        return d.addCallback(remember)
+
+    def getSDP(self, dialog, othersdp):
+        return GetSDP(cookie=self.cookies[dialog], othersdp=othersdp.show()).do(self).addCallback(lambda r: SDP(r["sdp"]))
+
+class MediaServerControlProtocol(juice.Juice):
+    #runs in RTP subprocess
+    file = None
+    def __init__(self, _):
+        juice.Juice.__init__(self, False)
+        self.codec = Codecker(PT_PCMU)
+        self.currentRecordings = {}
+        self.currentPlayouts = {}
+        self.cookies = 0
+
+    def dropCall(self, cookie):
+        pass
+
+    def incomingRTP(self, cookie, packet):
+        rtp, fObj = self.currentRecordings[cookie]
+        if packet.header.ct is PT_NTE:
+            data = packet.data
+            key = ord(data[0])
+            start = (ord(data[1]) & 128) and True or False
+            if start:
+                d = DTMF(cookie=cookie, key=key).do(self)
+            else:
+                #print "stop inbound dtmf", key
+                return
+        else:
+            if fObj is not None:
+                fObj.write(self.codec.decode(packet))
+
+    def command_START_RECORDING(self, cookie, filename, format="raw"):
+        rtp, currentFile = self.currentRecordings[cookie]
+        formats = {"wav": WavWriter,
+                   "raw": (lambda f: f)}
+        if format not in formats:
+            raise ValueError("no support for writing format %r" % (format,))
+
+        if currentFile is not None:
+            log.msg("Uh oh we were already recording in %s" % (currentFile))
+            currentFile.close()
+        log.msg("FORMAT IS! %s" % (formats[format],))
+        self.currentRecordings[cookie] = (rtp, formats[format](open(filename, 'wb')))
+        return {}
+    command_START_RECORDING.command = StartRecording
+
+    def command_STOP_RECORDING(self, cookie):
+        #XXX what should this return
+        if cookie in self.currentRecordings:
+            rtp, f = self.currentRecordings[cookie]
+            self.currentRecordings[cookie] = (rtp, None)
+            if f:
+                f.close()
+        return {}
+
+    command_STOP_RECORDING.command = StopRecording
+
+    def command_PLAY_FILE(self, cookie, filename, format="raw"):
+        """
+        Play a shtoom-format sound file. (Raw unsigned linear, 16 bit
+        8000Hz audio. sox options: -u -w -r 8000)
+        """
+        rtp, _ = self.currentRecordings[cookie]
+        formats = {"wav": (WavReader, 160),
+                   "raw": ((lambda f: f), 320),
+                   "gsm": (GSMReader, 320)}
+        if format not in formats:
+            raise ValueError("no support for format %r" % (format,))
+        codec, samplesize = formats[format]
+        f = codec(open(filename))
+        d = defer.Deferred()
+        def playSample():
+            data = f.read(samplesize)
+            if data == '':
+                self.stopPlaying(cookie, True)
+            else:
+                sample = self.codec.handle_audio(data)
+                rtp.handle_media_sample(sample)
+        if cookie in self.currentPlayouts:
+            self.stopPlaying(cookie, False)
+        LC = task.LoopingCall(playSample)
+        LC.start(0.020)
+        self.currentPlayouts[cookie] = LC, d
+        return d
+
+    command_PLAY_FILE.command = PlayFile
+
+    def command_CREATE_RTPSOCKET(self, host):
+        c = self.makeCookie()
+        rtp = RTPProtocol(self, c)
+        self.currentRecordings[c] = (rtp, None)
+        rtp.createRTPSocket(host, False)
+        return {"cookie": c}
+    command_CREATE_RTPSOCKET.command = CreateRTPSocket
+
+    def command_GET_SDP(self, cookie, othersdp=None):
+        rtp, _ = self.currentRecordings[cookie]
+        return {"sdp": rtp.getSDP(SDP(othersdp)).show()}
+    command_GET_SDP.command = GetSDP
+
+    def command_STOP(self, cookie):
+        rtp, _ = self.currentRecordings[cookie]
+        self.stopPlaying(cookie, False)
+        self.command_STOP_RECORDING(cookie)
+        del self.currentRecordings[cookie]
+        rtp.stopSendingAndReceiving()
+        rtp.timeouterLoop.stop()
+        return {}
+    command_STOP.command = RTPStop
+
+    def command_START(self, cookie, targethost, targetport):
+        rtp, _ = self.currentRecordings[cookie]
+        rtp.start((targethost, targetport))
+        return {}
+    command_START.command = RTPStart
+
+    def command_STOP_PLAYING(self, cookie):
+        self.stopPlaying(cookie, False)
+        return {}
+    command_STOP_PLAYING.command = StopPlaying
+
+    def stopPlaying(self, cookie, finishedPlaying):
+        if cookie not in self.currentPlayouts:
+            return
+        LC, d = self.currentPlayouts[cookie]
+        if LC:
+            LC.stop()
+            LC = None
+            d.callback({"done": finishedPlaying})
+            del self.currentPlayouts[cookie]
+
+
+    def makeCookie(self):
+        self.cookies += 1
+        return "cookie%s" % (self.cookies,)
+
+class MediaServer(Service):
+    def startService(self):
+        j = MediaServerControlProtocol(False)
+        stdio.StandardIO(j)
 
 class Dialog:
     """
@@ -54,7 +336,11 @@ class Dialog:
         self.direction = "server"
         self.routeSet = [parseAddress(route) for route in self.msg.headers.get('record-route', [])]
         self.clientState = "confirmed"
-        return self.rtp.createRTPSocket(contactURI.host, False).addCallback(lambda _: self)
+        self.rtp = self.tu.mediaController.getRTP()
+        def gotCookie(c):
+            self.cookie = c
+            return self
+        return self.rtp.createRTPSocket(self, contactURI.host).addCallback(gotCookie)
 
     forServer = classmethod(forServer)
 
@@ -79,6 +365,7 @@ class Dialog:
         self = cls(tu, contactURI)
         self.callController = controller
         self.direction = "client"
+        self.rtp = self.tu.mediaController.getRTP()
         return self._generateInvite(contactURI, fromName, targetURI, noSDP)
 
     forClient = classmethod(forClient)
@@ -88,9 +375,6 @@ class Dialog:
         self.tu = tu
         self.contactURI = contactURI
         self.localCSeq = random.randint(1E4,1E5)
-        self.rtp = RTPProtocol(tu, self)
-        #XXX move this to a friendlier place
-        self.codec = Codecker(PT_PCMU)
         self.LC = None
         #UAC bits
         self.clientState = "early"
@@ -167,11 +451,14 @@ class Dialog:
         #XXX maybe rip off IP discovered in SDP phase?
         invite.addHeader("contact", formatAddress(contacturi))
         def fillSDP(_):
-            sdp = self.rtp.getSDP().show()
-            self.sessionDescription = sdp
-            invite.body = sdp
-            invite.headers['content-length'] = [str(len(sdp))]
-            invite.creationFinished()
+            def consultSDP(sdpobj):
+                sdp = sdpobj.show()
+                self.sessionDescription = sdp
+                invite.body = sdp
+                invite.headers['content-length'] = [str(len(sdp))]
+                invite.creationFinished()
+            return defer.maybeDeferred(self.rtp.getSDP, self, None)
+
         def finish(_):
             self.msg = invite
             toAddress,fromAddress = self._finishInit()
@@ -199,7 +486,7 @@ class Dialog:
         msg.body = newSDP.show()
         msg.headers['content-length'] = [str(len(newSDP.show()))]
         msg.addHeader("content-type", "application/sdp")
-        
+
         self.reinviteMsg = msg
         self.reinviteSDP = newSDP
         for ct in self.tu.cts:
@@ -277,54 +564,45 @@ class Dialog:
                                                         branch=computeBranch(msg)).toString())
         self.tu.transport.sendRequest(msg, (dest.host, dest.port))
 
-    def playFile(self, f, samplesize=320):
-        """
-        Play a shtoom-format sound file. (Raw unsigned linear, 16 bit
-        8000Hz audio. sox options: -u -w -r 8000)
-        """
 
-        d = defer.Deferred()
-        def playSample():
-            data = f.read(samplesize)
-            if data == '':
-                self.stopPlaying()
-                d.callback(True)
-            else:
-                sample = self.codec.handle_audio(data)
-                self.rtp.handle_media_sample(sample)
-        if self.LC:
-            self.LC.stop()
-        self.LC = task.LoopingCall(playSample)
-        self.LC.start(0.020)
-        return d
+    def playFile(self, filename, codec=None):
+        def check(r):
+            if not r['done']:
+                return defer.fail(RuntimeError("cancelled"))
 
-    def playWave(self, f):
-        "Play a PCM-encoded WAV file. (Compressed WAVs probably won't work.)"
-        return self.playFile(WavReader(f), samplesize=160)
+        if codec is None:
+            return PlayFile(cookie=self.cookie, filename=str(filename)).do(self.rtp).addCallback(check)
+        else:
+            return PlayFile(cookie=self.cookie, filename=str(filename), format=codec).do(self.rtp).addCallback(check)
+
+    def stopPlaying(self):
+        return StopPlaying(cookie=self.cookie).do(self.rtp)
+
+    def end(self):
+        RTPStop(cookie=self.cookie).do(self.rtp)
+        self.callController.callEnded(self)
+
+    def startRecording(self, filename, format):
+        return StartRecording(
+            cookie=self.cookie,
+            format=format,
+            filename=str(filename)).do(self.rtp)
+
+    def endRecording(self):
+        return StopRecording(
+            cookie=self.cookie).do(self.rtp)
 
     def startAudio(self, sdp):
         md = sdp.getMediaDescription('audio')
         addr = md.ipaddr or sdp.ipaddr
         def go(ipaddr):
             remoteAddr = (ipaddr, md.port)
-            self.rtp.start(remoteAddr)
+            return RTPStart(cookie=self.cookie, targethost=remoteAddr[0], targetport=remoteAddr[1]).do(self.rtp)
         reactor.resolve(addr).addCallback(go)
-        
-    def stopPlaying(self):
-        if self.LC:
-            self.LC.stop()
-            self.LC = None
-
-    def end(self):
-        self.rtp.stopSendingAndReceiving()
-        self.rtp.timeouterLoop.stop()
-        self.callController.callEnded(self)
-
-
 
 def upgradeSDP(currentSession, newSDP):
     "Read the media description from the new SDP and update the current session by removing the current media."
-    
+
     sdp = SDP(currentSession)
     if newSDP.ipaddr:
         c = (newSDP.nettype, newSDP.addrfamily, newSDP.ipaddr)
@@ -403,24 +681,26 @@ class UserAgent(SIPResolverMixin):
     """
     implements(ITransactionUser)
 
-    def server(cls, voicesystem, localHost, dialogs=None):
+    def server(cls, voicesystem, localHost, mediaController, dialogs=None):
         """
         I listen for incoming SIP calls and connect them to
         ICallController instances, looked up via an IVoiceSystem.
         """
         self = cls(localHost, dialogs)
+        self.mediaController = mediaController
         self.voicesystem = voicesystem
         return self
 
     server = classmethod(server)
 
-    def client(cls, controller, localpart, localHost, dialogs=None):
+    def client(cls, controller, localpart, localHost, mediaController, dialogs=None):
         """
         I create calls to SIP URIs and connect them to my ICallController instance.
         """
         self = cls(localHost, dialogs)
         self.controller = controller
         self.user = localpart
+        self.mediaController = mediaController
         return self
 
     client = classmethod(client)
@@ -492,24 +772,26 @@ class UserAgent(SIPResolverMixin):
                 sdp = SDP(msg.body)
             else:
                 sdp = None
-            mysdp = dialog.rtp.getSDP(sdp)
-            if not mysdp.hasMediaDescriptions():
-                st.messageReceivedFromTU(responseFromRequest(488, msg))
-                return st
-            dialog.sessionDescription = mysdp
-            if dialog.clientState == "reinviteSent":
-                st.messageReceivedFromTU(dialog.responseFromRequest(491, msg))
-            else:
-                if sdp:
-                    self.maybeStartAudio(dialog, sdp)
-                dialog.msg = msg
-                dialog.reinviteMsg = True
-                dialog.remoteAddress = parseAddress(msg.headers['from'][0])
-                response = dialog.responseFromRequest(200, msg, mysdp.show())
-                st.messageReceivedFromTU(response)
-                dialog.ackTimerRetry(response)
+            d = defer.maybeDeferred(dialog.rtp.getSDP, dialog, sdp)
+            def gotSDP(mysdp):
+                if not mysdp.hasMediaDescriptions():
+                    st.messageReceivedFromTU(responseFromRequest(488, msg))
+                    return st
+                dialog.sessionDescription = mysdp
+                if dialog.clientState == "reinviteSent":
+                    st.messageReceivedFromTU(dialog.responseFromRequest(491, msg))
+                else:
+                    if sdp:
+                        self.maybeStartAudio(dialog, sdp)
+                    dialog.msg = msg
+                    dialog.reinviteMsg = True
+                    dialog.remoteAddress = parseAddress(msg.headers['from'][0])
+                    response = dialog.responseFromRequest(200, msg, mysdp.show())
+                    st.messageReceivedFromTU(response)
+                    dialog.ackTimerRetry(response)
 
-            return st
+                return st
+            return d.addCallback(gotSDP)
         #otherwise, time to start a new dialog
 
         d = Dialog.forServer(self, URL(self.host,
@@ -526,18 +808,21 @@ class UserAgent(SIPResolverMixin):
                 sdp = SDP(msg.body)
             else:
                 sdp = None
-            mysdp = dialog.rtp.getSDP(sdp)
-            dialog.sessionDescription = mysdp
-            if not mysdp.hasMediaDescriptions():
-                st.messageReceivedFromTU(responseFromRequest(406, msg))
-                return st
-            if sdp:
-                self.maybeStartAudio(dialog, sdp)
-            self.dialogs[dialog.getDialogID()] = dialog
-            response = dialog.responseFromRequest(200, msg, mysdp.show())
-            st.messageReceivedFromTU(response)
+            d = defer.maybeDeferred(dialog.rtp.getSDP, dialog, sdp)
+            def gotSDP(mysdp):
+                dialog.sessionDescription = mysdp
+                if not mysdp.hasMediaDescriptions():
+                    st.messageReceivedFromTU(responseFromRequest(406, msg))
+                    return st
+                if sdp:
+                    self.maybeStartAudio(dialog, sdp)
+                self.dialogs[dialog.getDialogID()] = dialog
+                response = dialog.responseFromRequest(200, msg, mysdp.show())
+                st.messageReceivedFromTU(response)
 
-            dialog.ackTimerRetry(response)
+                dialog.ackTimerRetry(response)
+            d.addCallback(gotSDP)
+            return d
 
         def failedLookup(err):
             err.trap(NoSuchUser, UnauthorizedLogin)
@@ -605,9 +890,13 @@ class UserAgent(SIPResolverMixin):
         else:
             #the 200 contained the offer, answer in the ACK
             sdp = SDP(response.body)
-            mysdp = dialog.rtp.getSDP(sdp).show()
-            dialog.sendAck(mysdp)
-            dialog.sessionDescription = mysdp
+            d = defer.maybeDeferred(dialog.rtp.getSDP, dialog, sdp)
+            def gotSDP(mysdpobj):
+                mysdp = mysdpobj.show()
+                dialog.sendAck(mysdp)
+                dialog.sessionDescription = mysdp
+            d.addCallback(gotSDP)
+            return d
 
     def reinviteResponseReceived(self, dialog, response, ct):
         if response.code == 491:
@@ -680,31 +969,10 @@ class UserAgent(SIPResolverMixin):
         if self.shutdownDeferred and not self.cts:
             self.shutdownDeferred.callback(True)
 
-    def incomingRTP(self, dialog, packet):
-        from xshtoom.rtp.formats import PT_NTE
-        if packet.header.ct is PT_NTE:
-            data = packet.data
-            key = ord(data[0])
-            start = (ord(data[1]) & 128) and True or False
-            if start:
-                #print "start inbound dtmf", key
-                d = defer.maybeDeferred(dialog.callController.receivedDTMF, dialog, key)
-            else:
-                #print "stop inbound dtmf", key
-                return
-        else:
-            d = defer.maybeDeferred(dialog.callController.receivedAudio, dialog, dialog.codec.decode(packet))
-        def e(err):
-            err.trap(Hangup)
-            #fudge a little to let playback finish
-            reactor.callLater(0.5, dialog.sendBye)
-        d.addErrback(e)
-
-
     def dropCall(self, dialog):
         "For shtoom compatibility."
         dialog.sendBye()
-        
+
 
 
 class SimpleCallRecipient:
@@ -721,8 +989,8 @@ class SimpleCallRecipient:
 
     def callBegan(self, dialog):
         import os
-        f = open(os.path.join(os.path.split(__file__)[0], 'test_audio.raw'))
-        dialog.playFile(f).addCallback(lambda _: self.beginRecording())
+        fn = os.path.join(os.path.split(__file__)[0], 'test_audio.raw')
+        dialog.playFile(fn).addCallback(lambda _: self.beginRecording())
 
     def receivedDTMF(self, key):
         if key == 11:

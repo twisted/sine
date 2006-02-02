@@ -54,21 +54,17 @@ class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
             booth=booth)
         ticketSignup.installOn(s)
 
-        svc = s.findOrCreate(sipserver.SIPDispatcherService, hostnames=self['domain'])
-        svc.installOn(s)
 
         #Is there a real way to do this?
-        
-        
         u = portal.IRealm(s).addAccount(u'confession', self['domain'], u'no password :(')
         us = u.avatars.open()
         confession.AnonConfessionUser(store=us).installOn(us)
         confession.ConfessionDispatcher(store=us, localHost=self['domain']).installOn(us)
         
-        u = portal.IRealm(s).addAccount(u'echo', self['domain'], u'no password :(')
-        us = u.avatars.open()
-        echo.EchoTest(store=us).installOn(us)
-        echo.EchoDispatcher(store=us, localHost=self['domain']).installOn(us)
+        #u = portal.IRealm(s).addAccount(u'echo', self['domain'], u'no password :(')
+        #us = u.avatars.open()
+        #echo.EchoTest(store=us).installOn(us)
+        #echo.EchoDispatcher(store=us, localHost=self['domain']).installOn(us)
         
 class ConfessionConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
     classProvides(plugin.IPlugin, iaxiom.IAxiomaticCommand)

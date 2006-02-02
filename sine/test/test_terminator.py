@@ -1,7 +1,8 @@
-from sine.test.test_sip import FakeClockTestCase, TestRealm, PermissiveChecker
+from xshtoom.sdp import SDP, MediaDescription
+from xshtoom.rtp.formats import PT_PCMU
+from sine.test.test_sip import FakeClockTestCase
 from sine import sip, useragent
-from twisted import cred
-from twisted.internet import reactor
+from twisted.internet import reactor, defer
 from twisted.trial import unittest
 from zope.interface import implements
 from axiom import store, userbase, item, attributes
@@ -123,7 +124,23 @@ class FakeCallRecipient:
 
     def buildCallController(self, dialog):
         return self
- 
+class FakeMediaController:
+    def getRTP(self):
+        class FakeRTP:
+            transport=None
+            def createRTPSocket(self, dialog, host):
+                return defer.succeed(None)
+            def getSDP(self, dialog, othersdp):
+                s = SDP()
+                m = MediaDescription()
+                s.addMediaDescription(m)
+                m.addRtpMap(PT_PCMU)
+                s.intersect(othersdp)
+                return s
+            def sendBoxCommand(self, *args):
+                return defer.succeed({})
+        return FakeRTP()
+
 class CallTerminateTest(FakeClockTestCase):
 
     def setUp(self):
@@ -134,7 +151,7 @@ class CallTerminateTest(FakeClockTestCase):
         account = self.login.addAccount('bob', 'proxy2.org', None)
         us = account.avatars.open()
         FakeAvatar(store=us).installOn(us)
-        self.uas = useragent.UserAgent.server(sip.IVoiceSystem(us), "127.0.0.2")
+        self.uas = useragent.UserAgent.server(sip.IVoiceSystem(us), "127.0.0.2", FakeMediaController())
         self.sent = []
         self.sip = sip.SIPTransport(self.uas, ["server.com"], 5060)
         self.sip.startProtocol()
@@ -210,7 +227,6 @@ class CallTerminateTest(FakeClockTestCase):
         self.assertMsgEqual(self.sent[0][0], response200)
         self.sent = []
 
-        
         self.sip.datagramReceived(ackRequest, ('10.0.0.1', 5060))
         self.assertEquals(len(self.sent), 0)
         self.sip.datagramReceived(byeRequest, ('10.0.0.1', 5060))

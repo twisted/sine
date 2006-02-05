@@ -1,18 +1,16 @@
 import os
-from zope.interface import classProvides
 
 from twisted.python import usage
-from twisted import plugin
 from twisted.cred import portal
 from vertex.scripts import certcreate
 
-from axiom import iaxiom, errors as eaxiom, scheduler, userbase
+from axiom import errors as eaxiom, scheduler, userbase
 from axiom.scripts import axiomatic
 
 from xmantissa import signup, website
-from sine import confession, sipserver, echo
+from sine import confession, echo
 
-class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
+class Install(axiomatic.AxiomaticSubCommand):
     longdesc = """
     Install confession things
     """
@@ -66,9 +64,7 @@ class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
         #echo.EchoTest(store=us).installOn(us)
         #echo.EchoDispatcher(store=us, localHost=self['domain']).installOn(us)
         
-class ConfessionConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
-    classProvides(plugin.IPlugin, iaxiom.IAxiomaticCommand)
-
+class ConfessionConfiguration(axiomatic.AxiomaticCommand):
     name = 'confession-site'
     description = 'Chronicler of confessions'
 

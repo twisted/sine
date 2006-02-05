@@ -1,20 +1,11 @@
-import os
-from zope.interface import classProvides
-
-from twisted.python import usage
-from twisted import plugin
-from twisted.cred import portal
 from twisted.application.service import IService, Service
-from vertex.scripts import certcreate
 
-from axiom import iaxiom, errors as eaxiom, scheduler, userbase, item, attributes
+from axiom import scheduler, userbase, item, attributes
 from axiom.scripts import axiomatic
 
-from xmantissa import signup, website
-from sine import confession, sipserver, echo, sip
+from sine import sipserver, sip
 
-class TPCC(usage.Options, axiomatic.AxiomaticSubCommandMixin):
-    classProvides(plugin.IPlugin, iaxiom.IAxiomaticCommand)
+class TPCC(axiomatic.AxiomaticCommand):
     longdesc = """
     Install TPCC tester (calls washort@divmod.com, confession@watt.divmod.com)
     """

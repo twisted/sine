@@ -1,18 +1,9 @@
-import os, getpass
-
-from zope.interface import classProvides
-
-from twisted.python import usage, util
-from twisted.cred import portal
-from twisted import plugin
+from twisted.python import usage
 from axiom.scripts import axiomatic
-from axiom import iaxiom, errors as eaxiom, userbase, scheduler
+from axiom import userbase, scheduler
 from sine import sipserver
 
-from xmantissa import webadmin, website, signup
-from vertex.scripts import certcreate
-
-class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
+class Install(axiomatic.AxiomaticSubCommand):
     "Install a SIP proxy and registrar backed by an Axiom user database."
 
     longdesc = __doc__
@@ -39,7 +30,7 @@ class Install(usage.Options, axiomatic.AxiomaticSubCommandMixin):
         s.findOrCreate(userbase.LoginSystem).installOn(s)
 
 
-class Register(usage.Options, axiomatic.AxiomaticSubCommandMixin):
+class Register(axiomatic.AxiomaticSubCommand):
     "Add an account on another host for the proxy to register with on startup."
 
     longdesc = __doc__
@@ -58,9 +49,7 @@ class Register(usage.Options, axiomatic.AxiomaticSubCommandMixin):
         r = sipserver.Registration(store=s,username=self['username'], password=unicode(self['password']), 
                                domain=self['domain'], parent=srv)
 
-class SIPProxyConfiguration(usage.Options, axiomatic.AxiomaticSubCommandMixin):
-    classProvides(plugin.IPlugin, iaxiom.IAxiomaticCommand)
-
+class SIPProxyConfiguration(axiomatic.AxiomaticCommand):
     name = "sip-proxy"
     description = "SIP proxy and registrar"
 

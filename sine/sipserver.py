@@ -206,7 +206,7 @@ class SinePreferenceCollection(Item, InstallableMixin):
 
     schemaVersion = 1
     typeName = 'sine_preference_collection'
-    name = 'Sine Preferences'
+    applicationName = 'Sine'
 
     installedOn = reference()
     localpart = text()
@@ -248,6 +248,9 @@ class SinePreferenceCollection(Item, InstallableMixin):
 
         if pref.key == 'localpart':
             self._localpartSet()
+
+    def getSections(self):
+        return None
 
 class SineBenefactor(Item):
     implements(ixmantissa.IBenefactor)

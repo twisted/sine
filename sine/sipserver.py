@@ -49,7 +49,8 @@ class SIPServer(Item, Service, InstallableMixin):
     def installOn(self, other):
         super(SIPServer, self).installOn(other)
         other.powerUp(self, IService)
-        self.setServiceParent(other)
+        if self.parent is None:
+            self.setServiceParent(other)
 
 
     def startService(self):

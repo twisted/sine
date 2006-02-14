@@ -116,8 +116,8 @@ class SIPServer(Item, Service, InstallableMixin):
         # early...
         localpart = "clicktocall"
         host = self.hostnames.split(',')[0]
-        controller = tpcc.ThirdPartyCallController(self.dispatcher, localpart, host, partyA[0], partyB[1])
-        uac = useragent.UserAgent.client(controller, localpart, host, self.dispatcher.dialogs)
+        controller = tpcc.ThirdPartyCallController(self.dispatcher, localpart, host, self.mediaController, partyA[0], partyB[1])
+        uac = useragent.UserAgent.client(controller, localpart, host, self.mediaController, self.dispatcher.dialogs)
         uac.transport = self.dispatcher.transport
         self.dispatcher.installTemporaryProcessor(sip.URL(host, localpart), uac)
 

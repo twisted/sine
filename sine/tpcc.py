@@ -1,3 +1,4 @@
+import os
 from xshtoom.sdp import SDP
 from zope.interface import implements
 from twisted.internet import defer
@@ -6,9 +7,7 @@ from twisted.python import log
 
 ASTERISK_SOUNDS_DIR = "/usr/share/asterisk/sounds"
 def soundFile(name):
-    import os
-    from xshtoom.audio.aufile import GSMReader
-    return GSMReader(open(os.path.join(ASTERISK_SOUNDS_DIR, name+".gsm")))
+    return os.path.join(ASTERISK_SOUNDS_DIR, name+".gsm")
 
 class UserAgent43PCC(useragent.UserAgent):
     def maybeStartAudio(self, dialog, sdp):
@@ -24,11 +23,11 @@ class UserAgentA(UserAgent43PCC):
     of an ACK to party B just before sending one to my peer. Also,
     receipt of a BYE sends a BYE to the other party.
     """
-    def __init__(self, userAgentB, localpart, localHost, dialogs):
+    def __init__(self, userAgentB, localpart, localHost, mc, dialogs):
         self.userAgentB = userAgentB
         self.controller = TrivialController()
         self.user = localpart
-        useragent.UserAgent.__init__(self, localHost, dialogs)
+        useragent.UserAgent.__init__(self, localHost, mc, dialogs)
 
     def acknowledgeInvite(self, dialog, response):
         #step 9 has just occurred    
@@ -52,12 +51,12 @@ class UserAgentB(UserAgent43PCC):
     the other party.
 
     """
-    def __init__(self, partyADialog, localpart, localHost, dialogs):
+    def __init__(self, partyADialog, localpart, localHost, mc, dialogs):
 
         self.controller = TrivialController()
         self.partyADialog = partyADialog
         self.user = localpart
-        useragent.UserAgent.__init__(self, localHost, dialogs)
+        useragent.UserAgent.__init__(self, localHost, mc, dialogs)
         self.ackDeferred = None
 
     def acknowledgeInvite(self, dialog, response):
@@ -67,7 +66,7 @@ class UserAgentB(UserAgent43PCC):
             sdp = SDP(response.body)
             self.partyADialog.reinvite(None, sdp)
             oldtu = self.partyADialog.tu
-            self.partyADialog.tu = UserAgentA(self, self.user, self.host, self.dialogs)
+            self.partyADialog.tu = UserAgentA(self, self.user, self.host, self.mediaController, self.dialogs)
             self.partyADialog.tu.transport = self.transport
             for ct in self.transport.clientTransactions.values():
                 if ct.tu == oldtu:
@@ -95,16 +94,17 @@ class ThirdPartyCallController:
     """
     
     implements(useragent.ICallController)
-    def __init__(self, dispatcher, localpart, localHost, fromName, partyB):
+    def __init__(self, dispatcher, localpart, localHost, mc, fromName, partyB):
         self.dispatcher = dispatcher
         self.localpart = localpart
         self.host = localHost
         self.fromName = fromName
         self.partyB = partyB
         self.reinvited = False
+        self.mc = mc
     def callBegan(self, dialog):
-        d1 = dialog.playFile(soundFile("transfer"))
-        uac2 = UserAgentB(dialog, self.localpart, self.host, self.dispatcher.dialogs)
+        d1 = dialog.playFile(soundFile("transfer"), "gsm")
+        uac2 = UserAgentB(dialog, self.localpart, self.host, self.mc, self.dispatcher.dialogs)
         uac2.transport = self.dispatcher.transport
         uac2._doCall(self.partyB, noSDP=True, fromName=self.fromName)
 

@@ -163,7 +163,11 @@ class LocalControlProtocol(juice.Juice):
         return d.addCallback(remember)
 
     def getSDP(self, dialog, othersdp):
-        return GetSDP(cookie=self.cookies[dialog], othersdp=othersdp.show()).do(self).addCallback(lambda r: SDP(r["sdp"]))
+        if othersdp:
+            othersdp = othersdp.show()
+        else:
+            othersdp = ""
+        return GetSDP(cookie=self.cookies[dialog], othersdp=othersdp).do(self).addCallback(lambda r: SDP(r["sdp"]))
 
 class MediaServerControlProtocol(juice.Juice):
     #runs in RTP subprocess
@@ -259,7 +263,11 @@ class MediaServerControlProtocol(juice.Juice):
 
     def command_GET_SDP(self, cookie, othersdp=None):
         rtp, _ = self.currentRecordings[cookie]
-        return {"sdp": rtp.getSDP(SDP(othersdp)).show()}
+        if othersdp:
+            sdptxt = SDP(othersdp)
+        else:
+            sdptxt = None
+        return {"sdp": rtp.getSDP(sdptxt).show()}
     command_GET_SDP.command = GetSDP
 
     def command_STOP(self, cookie):
@@ -466,7 +474,10 @@ class Dialog:
             self.remoteAddress = toAddress
             return self
 
-        d = self.rtp.createRTPSocket(contacturi.host, True)
+        d = self.rtp.createRTPSocket(self, contacturi.host)
+        def gotCookie(c):
+            self.cookie = c
+        d.addCallback(gotCookie)
         if noSDP:
             invite.creationFinished()
             return d.addCallback(finish)
@@ -686,8 +697,7 @@ class UserAgent(SIPResolverMixin):
         I listen for incoming SIP calls and connect them to
         ICallController instances, looked up via an IVoiceSystem.
         """
-        self = cls(localHost, dialogs)
-        self.mediaController = mediaController
+        self = cls(localHost, mediaController, dialogs)
         self.voicesystem = voicesystem
         return self
 
@@ -697,15 +707,16 @@ class UserAgent(SIPResolverMixin):
         """
         I create calls to SIP URIs and connect them to my ICallController instance.
         """
-        self = cls(localHost, dialogs)
+        self = cls(localHost, mediaController, dialogs)
         self.controller = controller
         self.user = localpart
-        self.mediaController = mediaController
+
         return self
 
     client = classmethod(client)
 
-    def __init__(self, localHost, dialogs):
+    def __init__(self, localHost, mc, dialogs):
+        self.mediaController = mc
         if dialogs is None:
             self.dialogs = {}
         else:

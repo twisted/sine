@@ -123,7 +123,7 @@ class ConfessionCall(object):
 
     def playReviewMessage(self, dialog):
         dialog.playFile(soundFile("vm-review"), "gsm").addCallback(
-            lambda x: x['done'] and dialog.playFile(soundFile("vm-star-cancel"), "gsm"))
+            lambda x: x['done'] and dialog.playFile(soundFile("vm-star-cancel"), "gsm")).addErrback(lambda e: log.err(e))
 
     class recording(mode):
         def receivedDTMF(self, dialog, key):
@@ -141,7 +141,7 @@ class ConfessionCall(object):
             dialog.stopPlaying()
             if key == 1:
                 self.endRecording(dialog)
-                self.saveRecording(self.avatar.store)
+                self.avatar.store.transact(self.saveRecording, self.avatar.store)
                 self.filename = None
                 return dialog.playFile(soundFile("auth-thankyou"), "gsm").addCallback (lambda _: self.hangup(dialog))
 

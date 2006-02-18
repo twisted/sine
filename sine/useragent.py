@@ -348,6 +348,8 @@ class Dialog:
         def gotCookie(c):
             self.cookie = c
             return self
+        self.acked = False
+        self.ended = False
         return self.rtp.createRTPSocket(self, contactURI.host).addCallback(gotCookie)
 
     forServer = classmethod(forServer)
@@ -590,6 +592,9 @@ class Dialog:
         return StopPlaying(cookie=self.cookie).do(self.rtp)
 
     def end(self):
+        if self.ended:
+            return
+        self.ended = True
         RTPStop(cookie=self.cookie).do(self.rtp)
         self.callController.callEnded(self)
 
@@ -848,7 +853,9 @@ class UserAgent(SIPResolverMixin):
             timer.cancel()
         if not getattr(dialog, 'reinviteMsg', None):
             #only do this for the initial INVITE
-            dialog.callController.callBegan(dialog)
+            if not dialog.acked:
+                dialog.callController.callBegan(dialog)
+                dialog.acked = True
         else: debug("reinvite ACKed")
         if msg.body:
             #must've gotten an invite with no SDP

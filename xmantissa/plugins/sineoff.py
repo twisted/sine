@@ -2,7 +2,7 @@ from axiom import iaxiom, userbase
 
 from xmantissa import website, offering, provisioning
 
-from sine import sipserver
+from sine import sipserver, sinetheme
 
 sineproxy = provisioning.BenefactorFactory(
     name = u'sineproxy',
@@ -24,6 +24,8 @@ plugin = offering.Offering(
     appPowerups = (sipserver.SinePublicPage,
         ),
 
-    benefactorFactories = (sineproxy,)
+    benefactorFactories = (sineproxy,),
+
+    themes = (sinetheme.XHTMLDirectoryTheme('base'),)
     )
 

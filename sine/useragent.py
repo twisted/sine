@@ -348,8 +348,6 @@ class Dialog:
         def gotCookie(c):
             self.cookie = c
             return self
-        self.acked = False
-        self.ended = False
         return self.rtp.createRTPSocket(self, contactURI.host).addCallback(gotCookie)
 
     forServer = classmethod(forServer)
@@ -390,7 +388,8 @@ class Dialog:
         self.clientState = "early"
         self.sessionDescription = None
         self.ackTimer = [None, 0]
-
+        self.acked = False
+        self.ended = False
 
     def _finishInit(self):
         self.callID = self.msg.headers['call-id'][0]

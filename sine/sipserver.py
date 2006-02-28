@@ -121,7 +121,7 @@ class SIPServer(Item, Service, InstallableMixin):
         uac.transport = self.dispatcher.transport
         self.dispatcher.installTemporaryProcessor(sip.URL(host, localpart), uac)
 
-        uac.call(partyA[1])
+        uac._doCall(partyA[1], "Divmod")
 
 class Registration(Item):
     typename = "sine_registration"

@@ -1,25 +1,32 @@
+import time
+
+from zope.interface import implements
+
+from twisted.python.util import sibpath
 from twisted.internet import reactor, defer
 from twisted.python.components import registerAdapter
 from twisted.application.service import IService, Service
 from twisted.cred.portal import IRealm, Portal
 from twisted.cred.checkers import ICredentialsChecker
-from axiom import userbase
+
+from nevow import athena, tags, static
+
+from epsilon.extime import Time
+
+from axiom import userbase, batch
 from axiom.attributes import integer, inmemory, bytes, text, reference, timestamp, AND
 from axiom.item import Item, InstallableMixin
 from axiom.slotmachine import hyper as super
-from epsilon.extime import Time
-from sine import sip, useragent, tpcc
-from nevow import athena, tags, static
+from axiom.errors import NoSuchUser
+
 from xmantissa import ixmantissa, website, webapp, liveform
 from xmantissa import prefs, webnav, tdb, tdbview
 from xmantissa.webtheme import getLoader
-from zope.interface import implements
-from axiom.errors import NoSuchUser
-from twisted.python.util import sibpath
 from xmantissa.publicresource import PublicPage
 
+import sine
+from sine import sip, useragent, tpcc
 
-import time
 
 class SIPConfigurationError(RuntimeError):
     """You specified some invalid configuration."""
@@ -43,9 +50,6 @@ class SIPServer(Item, Service, InstallableMixin):
     site = inmemory()
     transport = inmemory()
 
-    def activate(self):
-        self.mediaController = useragent.RTPTransceiverSubprocess()
-
     def installOn(self, other):
         super(SIPServer, self).installOn(other)
         other.powerUp(self, IService)
@@ -65,7 +69,11 @@ class SIPServer(Item, Service, InstallableMixin):
                 'No checkers: '
                 'you need to install a userbase before using this service.')
 
-        self.mediaController.startService()
+        tacPath = sibpath(sine.__file__, "media.tac")
+        self.mediaController = batch.ProcessController(
+            "rtp-transceiver",
+            useragent.LocalControlProtocol(False),
+            tacPath=tacPath)
 
         if self.pstn:
             pstnurl = sip.parseURL(self.pstn)

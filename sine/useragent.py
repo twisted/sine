@@ -10,13 +10,13 @@ from sine.sip import Response, Request, URL, T1, T2, SIPError, Via, debug
 from sine.sip import ClientTransaction, ServerTransaction, SIPLookupError
 from sine.sip import ITransactionUser, SIPResolverMixin, ServerInviteTransaction
 from sine.sip import ClientInviteTransaction, computeBranch
-from twisted.internet import reactor, defer, task, stdio
+from twisted.internet import reactor, defer, task, protocol, stdio
 from twisted.application.service import Service
 from twisted.cred.error import UnauthorizedLogin
 from twisted.python import log
 from axiom.errors import NoSuchUser
 from epsilon import process
-import random, wave, md5
+import random, wave, md5, textwrap
 from zope.interface import Interface, implements
 from vertex import juice
 
@@ -25,6 +25,80 @@ class Hangup(Exception):
     Raise this in ITransactionUser.receivedAudio or .receivedDTMF to
     end the call.
     """
+
+class RTPTransceiverSubprocess(Service):
+
+    subprogram = textwrap.dedent("""
+    import sine.useragent as ua
+    ua.MediaServer().startService()
+    from twisted.internet import reactor
+    from twisted.python import log
+    log.startLogging(file('rtp-transceiver.log', 'a'))
+    reactor.run()
+    """)
+
+    def startService(self):
+        self.juice = LocalControlProtocol(False)
+        self.protocol = MediaConnector(self.juice)
+        self.process = process.spawnPythonProcess(
+            self.protocol,
+            ("media connector", "-c", self.subprogram),
+            packages=('twisted', 'epsilon', 'vertex', 'sine', 'axiom'))
+
+
+    def stopService(self):
+        self.process.signalProcess('INT')
+
+    def getRTP(self):
+        return self.protocol.juice
+
+class MediaConnector(protocol.ProcessProtocol):
+
+    def __init__(self, proto):
+        self.juice = proto
+
+    def connectionMade(self):
+        log.msg("Media server started.")
+        self.juice.makeConnection(self)
+
+    # Transport
+    disconnecting = False
+
+    def write(self, data):
+        self.transport.write(data)
+
+    def writeSequence(self, data):
+        self.transport.writeSequence(data)
+
+    def loseConnection(self):
+        self.transport.loseConnection()
+
+    def getPeer(self):
+        return ('omfg what are you talking about',)
+
+    def getHost(self):
+        return ('seriously it is a process this makes no sense',)
+
+    def inConnectionLost(self):
+        protocol.ProcessProtocol.inConnectionLost(self)
+
+    def outConnectionLost(self):
+        self.juice.connectionLost(None)
+        protocol.ProcessProtocol.outConnectionLost(self)
+
+    def errConnectionLost(self):
+        protocol.ProcessProtocol.errConnectionLost(self)
+
+    def outReceived(self, data):
+        self.juice.dataReceived(data)
+
+    def errReceived(self, data):
+        log.msg("Received stderr from media server: " + repr(data))
+
+    def processEnded(self, status):
+        # Process termination is meaningless to Juice; outConnectionLost
+        # is what means we can't communicate any longer.
+        pass
 
 class StartRecording(juice.Command):
     commandName = 'Start-Recording'
@@ -95,7 +169,7 @@ class LocalControlProtocol(juice.Juice):
             othersdp = ""
         return GetSDP(cookie=self.cookies[dialog], othersdp=othersdp).do(self).addCallback(lambda r: SDP(r["sdp"]))
 
-class MediaServerControlProtocol(process.JuiceChild):
+class MediaServerControlProtocol(juice.Juice):
     #runs in RTP subprocess
     file = None
     def __init__(self, _):
@@ -270,13 +344,11 @@ class Dialog:
         self.direction = "server"
         self.routeSet = [parseAddress(route) for route in self.msg.headers.get('record-route', [])]
         self.clientState = "confirmed"
-        def gotRTP(rtp):
-            self.rtp = rtp
-            return self.rtp.createRTPSocket(self, contactURI.host)
+        self.rtp = self.tu.mediaController.getRTP()
         def gotCookie(c):
             self.cookie = c
             return self
-        return self.tu.mediaController.getProcess().addCallback(gotRTP).addCallback(gotCookie)
+        return self.rtp.createRTPSocket(self, contactURI.host).addCallback(gotCookie)
 
     forServer = classmethod(forServer)
 
@@ -301,9 +373,8 @@ class Dialog:
         self = cls(tu, contactURI)
         self.callController = controller
         self.direction = "client"
-        def startProcess(rtp):
-            self.rtp = rtp
-        return self.tu.mediaController.getProcess().addCallback(startProcess).addCallback(lambda _: self._generateInvite(contactURI, fromName, targetURI, noSDP))
+        self.rtp = self.tu.mediaController.getRTP()
+        return self._generateInvite(contactURI, fromName, targetURI, noSDP)
 
     forClient = classmethod(forClient)
     routeSet = None

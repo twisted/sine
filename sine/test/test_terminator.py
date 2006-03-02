@@ -124,8 +124,9 @@ class FakeCallRecipient:
 
     def buildCallController(self, dialog):
         return self
+
 class FakeMediaController:
-    def getRTP(self):
+    def getProcess(self):
         class FakeRTP:
             transport=None
             def createRTPSocket(self, dialog, host):
@@ -139,7 +140,7 @@ class FakeMediaController:
                 return s
             def sendBoxCommand(self, *args):
                 return defer.succeed({})
-        return FakeRTP()
+        return defer.succeed(FakeRTP())
 
 class CallTerminateTest(FakeClockTestCase):
 

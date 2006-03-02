@@ -8,6 +8,7 @@ from axiom.attributes import integer, inmemory, bytes, text, reference, timestam
 from axiom.item import Item, InstallableMixin
 from axiom.slotmachine import hyper as super
 from epsilon.extime import Time
+from epsilon import process
 from sine import sip, useragent, tpcc
 from nevow import athena, tags, static
 from xmantissa import ixmantissa, website, webapp, liveform
@@ -20,6 +21,7 @@ from xmantissa.publicresource import PublicPage
 
 
 import time
+import sine
 
 class SIPConfigurationError(RuntimeError):
     """You specified some invalid configuration."""
@@ -43,9 +45,6 @@ class SIPServer(Item, Service, InstallableMixin):
     site = inmemory()
     transport = inmemory()
 
-    def activate(self):
-        self.mediaController = useragent.RTPTransceiverSubprocess()
-
     def installOn(self, other):
         super(SIPServer, self).installOn(other)
         other.powerUp(self, IService)
@@ -65,7 +64,11 @@ class SIPServer(Item, Service, InstallableMixin):
                 'No checkers: '
                 'you need to install a userbase before using this service.')
 
-        self.mediaController.startService()
+        tacPath = sibpath(sine.__file__, "media.tac")
+        self.mediaController = process.ProcessController(
+            "rtp-transceiver",
+            useragent.LocalControlProtocol(False),
+            tacPath=tacPath)
 
         if self.pstn:
             pstnurl = sip.parseURL(self.pstn)

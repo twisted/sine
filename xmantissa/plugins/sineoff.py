@@ -25,7 +25,7 @@ plugin = offering.Offering(
         ),
 
     benefactorFactories = (sineproxy,),
-    loginInterfaces=(),
+
     themes = (sinetheme.XHTMLDirectoryTheme('base'),)
     )
 

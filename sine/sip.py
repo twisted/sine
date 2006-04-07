@@ -17,6 +17,7 @@ from twisted.protocols import basic
 
 from zope.interface import  Interface, implements
 
+from axiom import iaxiom
 from axiom.userbase  import Preauthenticated
 
 from epsilon.modal import mode, Modal
@@ -1533,6 +1534,7 @@ class SIPTransport(protocol.DatagramProtocol):
         self.messages.append(msg)
 
     def datagramReceived(self, data, addr):
+        log.msg(interface=iaxiom.IStatEvent, stat_bandwidth_sip_down=len(data))
         try:
             self.parser.dataReceived(data)
             self.parser.dataDone()
@@ -1664,8 +1666,9 @@ class SIPTransport(protocol.DatagramProtocol):
             lambda ip: self.sendMessage(msg, (ip, port)))
 
     def sendMessage(self, msg, (host, port)):
-        #for easier testing
-        self.transport.write(msg.toString(), (host, port))
+        data = msg.toString()
+        log.msg(interface=iaxiom.IStatEvent, stat_bandwidth_sip_up=len(data))
+        self.transport.write(data, (host, port))
 
     def _resolveA(self, addr):
         return reactor.resolve(addr)

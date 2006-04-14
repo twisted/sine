@@ -1147,7 +1147,7 @@ class ClientInviteTransaction(AbstractClientTransaction):
                 self.ack(msg)
                 self.transitionTo('completed')
                 self.tu.responseReceived(msg, self)
-                
+
         def __exit__(self):
             if self.timerB.active():
                 self.timerB.cancel()

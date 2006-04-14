@@ -27,7 +27,7 @@ class TPCC(axiomatic.AxiomaticCommand):
         svc.installOn(s)
         testsvc = s.findOrCreate(TestService, dispatcherSvc=svc)
         testsvc.installOn(s)
-        
+
 class TestService(item.Item, Service):
     typeName = 'sine_tpcc_test_service'
     schemaVersion = 1

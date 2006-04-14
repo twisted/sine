@@ -46,7 +46,7 @@ class Register(axiomatic.AxiomaticSubCommand):
         srv = s.findUnique(sipserver.SIPServer)
         if not self['username'] and self['domain']:
             raise usage.UsageError("Both a username and domain are required")
-        r = sipserver.Registration(store=s,username=self['username'], password=unicode(self['password']), 
+        r = sipserver.Registration(store=s,username=self['username'], password=unicode(self['password']),
                                domain=self['domain'], parent=srv)
 
 class SIPProxyConfiguration(axiomatic.AxiomaticCommand):
@@ -57,7 +57,7 @@ class SIPProxyConfiguration(axiomatic.AxiomaticCommand):
 
     subCommands = [('install', None, Install, "Install SIP Proxy components"),
                    ('register', None, Register, "Register with an external SIP registrar")
-                  ] 
+                  ]
     didSomething = False
 
     def getStore(self):

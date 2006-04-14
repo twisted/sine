@@ -46,7 +46,7 @@ class RTPProtocol(DatagramProtocol):
         # onto the Net is to reopen the audio device with a None (default)
         # media sample handler instead of this RTP object as the media sample handler.
         self.sending = False
-        
+
     def getSDP(self, othersdp=None):
         sdp = SDPGenerator().getSDP(self)
         if othersdp:

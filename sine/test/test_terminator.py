@@ -101,11 +101,11 @@ class FakeAvatar(item.Item, item.InstallableMixin):
     def localElementByName(self, name):
         return FakeCallRecipient()
 
-    
+
     def installOn(self, other):
         super(FakeAvatar, self).installOn(other)
         other.powerUp(self, sip.IVoiceSystem)
-        
+
 class FakeCallRecipient:
     implements(useragent.ICallControllerFactory, useragent.ICallController)
 

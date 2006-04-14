@@ -58,12 +58,12 @@ class Install(axiomatic.AxiomaticSubCommand):
         us = u.avatars.open()
         confession.AnonConfessionUser(store=us).installOn(us)
         confession.ConfessionDispatcher(store=us, localHost=self['domain']).installOn(us)
-        
+
         #u = portal.IRealm(s).addAccount(u'echo', self['domain'], u'no password :(')
         #us = u.avatars.open()
         #echo.EchoTest(store=us).installOn(us)
         #echo.EchoDispatcher(store=us, localHost=self['domain']).installOn(us)
-        
+
 class ConfessionConfiguration(axiomatic.AxiomaticCommand):
     name = 'confession-site'
     description = 'Chronicler of confessions'

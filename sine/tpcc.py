@@ -30,9 +30,9 @@ class UserAgentA(UserAgent43PCC):
         useragent.UserAgent.__init__(self, localHost, mc, dialogs)
 
     def acknowledgeInvite(self, dialog, response):
-        #step 9 has just occurred    
+        #step 9 has just occurred
         sdp = SDP(response.body)
-        if self.userAgentB.ackDeferred:            
+        if self.userAgentB.ackDeferred:
             self.userAgentB.ackDeferred.callback(sdp)
         dialog.sendAck() #step 11
 
@@ -92,7 +92,7 @@ class ThirdPartyCallController:
     """
     I start the second call after the original UserAgent sets up the first.
     """
-    
+
     implements(useragent.ICallController)
     def __init__(self, dispatcher, localpart, localHost, mc, fromName, partyB):
         self.dispatcher = dispatcher
@@ -121,7 +121,7 @@ class ThirdPartyCallController:
 
     def receivedDTMF(self, dialog, key):
         pass
-    
+
 class TrivialController:
     def acceptCall(self, dialog):
         pass

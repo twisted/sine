@@ -62,7 +62,7 @@ class AudioFromFiles(baseaudio.AudioDevice):
         self.LC = None
 
     def openDev(self):
-        from xshtoom.util import stack
+        #from xshtoom.util import stack
         self._getFiles()
         #print "openDev called!", self._closed, self.LC, stack()
         if self.LC is not None:

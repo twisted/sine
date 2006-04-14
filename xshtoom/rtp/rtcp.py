@@ -10,7 +10,6 @@ to generate RR or SR packets from the RTP stack. Soon.
 """
 
 from twisted.internet.protocol import DatagramProtocol
-from twisted.python import log
 import time
 
 RTCP_PT_SR = 200

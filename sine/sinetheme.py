@@ -1,4 +1,4 @@
 from xmantissa.webtheme import XHTMLDirectoryTheme
 
-class XHTMLDirectoryTheme(XHTMLDirectoryTheme):
+class SineTheme(XHTMLDirectoryTheme):
     pass

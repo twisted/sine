@@ -1,6 +1,6 @@
-import wave, sunau, aifc, sndhdr
+import wave, sunau, sndhdr
 
-from audioop import tomono, lin2lin, ulaw2lin, ratecv
+from audioop import tomono, lin2lin, ratecv
 
 import struct
 if struct.pack("h", 1) == "\000\001":

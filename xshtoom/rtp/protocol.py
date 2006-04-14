@@ -3,8 +3,8 @@
 # $Id: rtp.py,v 1.40 2004/03/07 14:41:39 anthony Exp $
 #
 
-import struct, sys, random, os, md5, socket
-from time import sleep, time
+import random, os, md5, socket
+from time import time
 
 from twisted.internet import reactor, defer
 from twisted.internet.protocol import DatagramProtocol
@@ -12,7 +12,6 @@ from twisted.python import log
 from twisted.internet.task import LoopingCall
 from xshtoom.rtp.formats import SDPGenerator, PT_CN, PT_xCN, PT_NTE, PT_PCMU
 from xshtoom.rtp.packets import RTPPacket, parse_rtppacket
-from xshtoom.audio.converters import MediaSample
 
 TWO_TO_THE_16TH = 2L<<16
 TWO_TO_THE_32ND = 2L<<32

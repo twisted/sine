@@ -1,4 +1,4 @@
-from axiom import iaxiom, userbase
+from axiom import userbase
 
 from xmantissa import website, offering, provisioning
 
@@ -26,6 +26,6 @@ plugin = offering.Offering(
 
     benefactorFactories = (sineproxy,),
     loginInterfaces=(),
-    themes = (sinetheme.XHTMLDirectoryTheme('base'),)
+    themes = (sinetheme.SineTheme('base'),)
     )
 

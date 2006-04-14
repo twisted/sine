@@ -192,7 +192,7 @@ def getMapper():
     from xshtoom.stun import getSTUN
     if natPref == 'stun':
         ud = getSTUN()
-        d = defer.DeferredList([defer.succeed(None), sd])
+        d = defer.DeferredList([defer.succeed(None), ud])
     else:
         nm = NullMapper()
         d = defer.DeferredList([defer.succeed(None),

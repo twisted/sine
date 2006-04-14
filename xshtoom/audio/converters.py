@@ -1,7 +1,7 @@
 # Copyright (C) 2004 Anthony Baxter
 from xshtoom.rtp.formats import PT_PCMU, PT_GSM, PT_SPEEX, PT_DVI4, PT_RAW
 from xshtoom.rtp.formats import PT_PCMA, PT_ILBC
-from xshtoom.rtp.formats import PT_CN, PT_xCN, AudioPTMarker
+from xshtoom.rtp.formats import PT_CN, PT_xCN
 from xshtoom.avail import codecs
 from xshtoom.audio import aufile, playout
 from zope.interface import Interface, implements

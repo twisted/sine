@@ -13,8 +13,6 @@ class TPCC(axiomatic.AxiomaticCommand):
     name = '3pcc'
     description = '3pcc hooray'
     optParameters = [
-        ('domain', 'd', 'faraday.divmod.com',
-         "the domain local users belong to."),
         ('port', 'p', '5060',
          'Port to listen on for SIP.')
         ]
@@ -23,7 +21,7 @@ class TPCC(axiomatic.AxiomaticCommand):
         s = self.parent.getStore()
         s.findOrCreate(scheduler.Scheduler).installOn(s)
         s.findOrCreate(userbase.LoginSystem).installOn(s)
-        svc = s.findOrCreate(sipserver.SIPDispatcherService, hostnames=self['domain'])
+        svc = s.findOrCreate(sipserver.SIPDispatcherService)
         svc.installOn(s)
         testsvc = s.findOrCreate(TestService, dispatcherSvc=svc)
         testsvc.installOn(s)

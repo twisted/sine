@@ -9,9 +9,6 @@ class Install(axiomatic.AxiomaticSubCommand):
     longdesc = __doc__
 
     optParameters = [
-        ('domain', 'd', 'localhost',
-         "Domain this registrar is authoritative for;\
-         i.e., the domain local users belong to."),
         ('port', 'p', '5060',
          'Port to listen on for SIP.'),
         ('pstn', None, '',
@@ -21,9 +18,8 @@ class Install(axiomatic.AxiomaticSubCommand):
     def postOptions(self):
         s = self.parent.getStore()
         svc = s.findOrCreate(sipserver.SIPServer,
-                       portno=int(self['port']),
-                       hostnames=self['domain'],
-                       pstn=self['pstn'])
+                             portno=int(self['port']),
+                             pstn=self['pstn'])
         svc.installOn(s)
 
         s.findOrCreate(scheduler.Scheduler).installOn(s)

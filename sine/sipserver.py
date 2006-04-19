@@ -14,13 +14,12 @@ from nevow import athena, tags, static
 from epsilon.extime import Time
 
 from axiom import userbase, batch
-from axiom.attributes import integer, inmemory, bytes, text, reference, timestamp, AND
+from axiom.attributes import integer, inmemory, bytes, text, reference, timestamp
 from axiom.item import Item, InstallableMixin
-from axiom.slotmachine import hyper as super
 from axiom.errors import NoSuchUser
 
 from xmantissa import ixmantissa, website, webapp, liveform
-from xmantissa import prefs, webnav, tdb, tdbview
+from xmantissa import webnav, tdb, tdbview
 from xmantissa.webtheme import getLoader
 from xmantissa.publicresource import PublicPage
 
@@ -32,11 +31,18 @@ class SIPConfigurationError(RuntimeError):
     """You specified some invalid configuration."""
 
 
+def getHostnames(store):
+    """
+    Like L{axiom.userbase.getDomainNames}, but also default to just
+    C{['localhost']} if there are no domains.
+    """
+    return userbase.getDomainNames(store) or ['localhost']
+
+
 class SIPServer(Item, Service, InstallableMixin):
     typeName = 'mantissa_sip_powerup'
     schemaVersion = 1
     portno = integer(default=5060)
-    hostnames =  bytes(default="localhost")
     installedOn = reference()
     pstn = bytes()
     parent = inmemory()
@@ -55,7 +61,6 @@ class SIPServer(Item, Service, InstallableMixin):
         other.powerUp(self, IService)
         if self.parent is None:
             self.setServiceParent(other)
-
 
     def startService(self):
         realm = IRealm(self.store, None)
@@ -91,12 +96,8 @@ class SIPServer(Item, Service, InstallableMixin):
                     raise SIPConfigurationError("Bad registration URL:", "You need both a username and a domain to register")
                 rc.register(reg.username, reg.password, reg.domain)
                 self.proxy.addProxyAuthentication(reg.username, reg.domain, reg.password)
-        self.transport = sip.SIPTransport(self.dispatcher, self.hostnames.split(','), self.portno)
+        self.transport = sip.SIPTransport(self.dispatcher, getHostnames(self.store), self.portno)
         self.port = reactor.listenUDP(self.portno, self.transport)
-
-    def get_hostname(self):
-        return self.hostnames.split(',')[0]
-    hostname = property(get_hostname)
 
 
     def setupCallBetween(self, partyA, partyB):
@@ -123,7 +124,7 @@ class SIPServer(Item, Service, InstallableMixin):
         # the intermediary call signalling, such as ending the call
         # early...
         localpart = "clicktocall"
-        host = self.hostnames.split(',')[0]
+        host = getHostnames()[0]
         controller = tpcc.ThirdPartyCallController(self.dispatcher, localpart, host, self.mediaController, partyA[0], partyB[1])
         uac = useragent.UserAgent.client(controller, localpart, host, self.mediaController, self.dispatcher.dialogs)
         uac.transport = self.dispatcher.transport
@@ -138,30 +139,6 @@ class Registration(Item):
     username = text()
     domain = text()
     password = text()
-
-class _LocalpartPreference(prefs.Preference):
-    def __init__(self, value, collection):
-        prefs.Preference.__init__(self, 'localpart', value,
-                                  'Localpart', collection, 'Localpart')
-
-    def choices(self):
-        return None
-
-    def displayToValue(self, display):
-        value = unicode(display)
-        store = self.collection.store.parent
-
-        for loginMethod in store.query(userbase.LoginMethod,
-                                       AND(userbase.LoginMethod.localpart == value,
-                                       userbase.LoginMethod.protocol == u'sip')):
-            raise prefs.PreferenceValidationError('Localpart is not unique')
-        return value
-
-    def valueToDisplay(self, value):
-        return str(value)
-
-    def settable(self):
-        return self.value is None
 
 class ListenToRecordingAction(tdbview.Action):
     def __init__(self):
@@ -209,58 +186,6 @@ class PublicIndexPage(PublicPage):
     def customizeFor(self, forUser):
         return self.__class__(self.original, self.staticContent, forUser)
 
-class SinePreferenceCollection(Item, InstallableMixin):
-
-    implements(ixmantissa.IPreferenceCollection)
-
-    schemaVersion = 1
-    typeName = 'sine_preference_collection'
-    applicationName = 'Sine'
-
-    installedOn = reference()
-    localpart = text()
-    _cachedPrefs = inmemory()
-
-    def installOn(self, other):
-        super(SinePreferenceCollection, self).installOn(other)
-        other.powerUp(self, ixmantissa.IPreferenceCollection)
-
-    def activate(self):
-        self._cachedPrefs = {"localpart": _LocalpartPreference(self.localpart, self)}
-
-    def getPreferences(self):
-        return self._cachedPrefs
-
-    def _localpartSet(self):
-        # localpart can only be set once - so we'll create a
-        # LoginMethod the first and only time it's value changes
-
-        substore = self.store.parent.getItemByID(self.store.idInParent)
-        hostname = self.store.parent.findUnique(SIPServer).hostname
-
-        for acc in self.store.parent.query(userbase.LoginAccount,
-                                           userbase.LoginAccount.avatars == substore):
-
-            userbase.LoginMethod(store=self.store.parent,
-                                localpart=self.localpart,
-                                internal=True,
-                                protocol=u'sip',
-                                verified=True,
-                                domain=unicode(hostname),
-                                account=acc)
-            break
-
-    def setPreferenceValue(self, pref, value):
-        assert hasattr(self, pref.key)
-        setattr(pref, 'value', value)
-        setattr(self, pref.key, value)
-
-        if pref.key == 'localpart':
-            self._localpartSet()
-
-    def getSections(self):
-        return None
-
 class SineBenefactor(Item):
     implements(ixmantissa.IBenefactor)
 
@@ -274,11 +199,13 @@ class SineBenefactor(Item):
         self.endowed += 1
         avatar.findOrCreate(website.WebSite).installOn(avatar)
         avatar.findOrCreate(webapp.PrivateApplication).installOn(avatar)
-        avatar.findOrCreate(SinePreferenceCollection).installOn(avatar)
         avatar.findOrCreate(TrivialContact).installOn(avatar)
         from sine import voicemail, confession
         avatar.findOrCreate(voicemail.VoicemailDispatcher).installOn(avatar)
         avatar.findOrCreate(confession.AnonConfessionUser).installOn(avatar)
+
+
+
 class PSTNContact:
     implements(sip.IContact)
     def __init__(self, avatarId, targethost, targetport):
@@ -304,6 +231,8 @@ class PSTNContact:
     unregisterAddress = incompleteImplementation
     callOutgoing = incompleteImplementation
 
+
+
 class PSTNPortalWrapper:
 
     def __init__(self, realPortal, targetHost, targetPort):
@@ -325,6 +254,8 @@ class PSTNPortalWrapper:
         D.addCallback(logcb)
         D.addErrback(eb)
         return D
+
+
 
 class TrivialContact(Item, InstallableMixin):
     implements(sip.IContact, ixmantissa.INavigableElement)
@@ -380,6 +311,8 @@ class TrivialContact(Item, InstallableMixin):
 
     def getTabs(self):
         return [webnav.Tab('Voice', self.storeID, 0.0)]
+
+
 
 class TrivialContactFragment(athena.LiveFragment):
     implements(ixmantissa.INavigableFragment)
@@ -467,14 +400,14 @@ class TrivialContactFragment(athena.LiveFragment):
     def head(self):
         return None
 
-
 registerAdapter(TrivialContactFragment, TrivialContact, ixmantissa.INavigableFragment)
 
-class SIPDispatcherService(Item, Service):
+
+
+class SIPDispatcherService(Item, InstallableMixin, Service):
     typeName = 'sine_sipdispatcher_service'
     schemaVersion = 1
     portno = integer(default=5060)
-    hostnames =  bytes()
     installedOn = reference()
 
     parent = inmemory()
@@ -487,9 +420,9 @@ class SIPDispatcherService(Item, Service):
     site = inmemory()
 
     def installOn(self, other):
-        assert self.installedOn is None, "You cannot install a SIPDispatcherService on more than one thing"
+        super(SIPDispatcherService, self).installOn(other)
         other.powerUp(self, IService)
-        self.installedOn = other
+
 
     def privilegedStartService(self):
         realm = IRealm(self.store, None)
@@ -505,8 +438,10 @@ class SIPDispatcherService(Item, Service):
         portal = Portal(realm, [chkr])
         self.proxy = sip.Proxy(portal)
         self.dispatcher = sip.SIPDispatcher(portal, self.proxy)
-        f = sip.SIPTransport(self.dispatcher, self.hostnames.split(','), self.portno)
+        f = sip.SIPTransport(self.dispatcher, getHostnames(self.store), self.portno)
         self.port = reactor.listenUDP(self.portno, f)
+
+
 
 class Call(Item):
     typeName = "sine_call"

@@ -310,7 +310,7 @@ class TrivialContact(Item, InstallableMixin):
         Call(store=self.store, name=name, time=Time(), uri=unicode(str(uri)), kind=u'to')
 
     def getTabs(self):
-        return [webnav.Tab('Voice', self.storeID, 0.0)]
+        return [webnav.Tab('Voice', self.storeID, 0.75)]
 
 
 

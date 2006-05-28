@@ -18,7 +18,7 @@ from axiom import batch
 from axiom.errors import NoSuchUser
 import random, wave, md5
 from zope.interface import Interface, implements
-from epsilon import juice
+from vertex import juice
 
 class Hangup(Exception):
     """

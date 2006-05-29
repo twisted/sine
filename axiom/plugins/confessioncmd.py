@@ -2,7 +2,7 @@ import os
 
 from twisted.python import usage
 from twisted.cred import portal
-from vertex.scripts import certcreate
+from epsilon.scripts import certcreate
 
 from axiom import errors as eaxiom, scheduler, userbase
 from axiom.scripts import axiomatic

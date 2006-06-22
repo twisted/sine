@@ -1,11 +1,15 @@
 from xshtoom.sdp import SDP, MediaDescription
 from xshtoom.rtp.formats import PT_PCMU
-from sine.test.test_sip import FakeClockTestCase
-from sine import sip, useragent
+from sine.test.test_sip import FakeClockTestCase, TaskQueue
+from sine import sip, useragent, sipserver
 from twisted.internet import reactor, defer
 from twisted.trial import unittest
+from twisted.test.proto_helpers import StringTransport
+from twisted.cred.portal import Portal
 from zope.interface import implements
 from axiom import store, userbase, item, attributes
+from epsilon import juice, hotfix
+hotfix.require("twisted", "proto_helpers_stringtransport")
 
 exampleInvite = """INVITE sip:bob@proxy2.org SIP/2.0\r
 Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9\r
@@ -134,14 +138,70 @@ class FakeMediaController:
             def getSDP(self, dialog, othersdp):
                 s = SDP()
                 m = MediaDescription()
+                m.port = 54321
                 s.addMediaDescription(m)
                 m.addRtpMap(PT_PCMU)
-                s.intersect(othersdp)
+                if othersdp:
+                    s.intersect(othersdp)
                 return s
             def sendBoxCommand(self, *args):
-                return defer.succeed({})
+                return defer.succeed({'done': "True"})
         return defer.succeed(FakeRTP())
 
+class TPCCTest(FakeClockTestCase):
+
+    def setUp(self):
+        self.dbdir = self.mktemp()
+        self.store = store.Store(self.dbdir)
+        self.login = userbase.LoginSystem(store=self.store)
+        self.login.installOn(self.store)
+        account = self.login.addAccount('bob', 'proxy2.org', None)
+        account2 = self.login.addAccount('alice', 'proxy1.org', None)
+        us = account.avatars.open()
+        FakeAvatar(store=us).installOn(us)
+        us2 = account2.avatars.open()
+        FakeAvatar(store=us2).installOn(us2)
+        self.tq = TaskQueue()
+        self.uas = useragent.UserAgent.server(sip.IVoiceSystem(us), "10.0.0.2", FakeMediaController())
+        self.uas2 = useragent.UserAgent.server(sip.IVoiceSystem(us2), "10.0.0.1", FakeMediaController())
+        self.sip1 = sip.SIPTransport(self.uas, ["server.com"], 5060)
+        self.sip1.startProtocol()
+        self.sip2 = sip.SIPTransport(self.uas2, ["client.com"], 5060)
+        self.sip2.startProtocol()
+
+        self.svc = sipserver.SIPServer(store=self.store)
+        self.svc.mediaController = FakeMediaController()
+        portal = Portal(self.login, [self.login])
+        self.svc.dispatcher = sip.SIPDispatcher(portal, sip.Proxy(portal))
+        self.svc.transport = sip.SIPTransport(self.svc.dispatcher, sipserver.getHostnames(self.store), 5060)
+        self.svc.dispatcher.start(self.svc.transport)
+        dests = {('10.0.0.2', 5060): self.uas, ('10.0.0.1', 5060): self.uas2,
+                 ('127.0.0.1', 5060): self.svc}
+        self.sip1.sendMessage = lambda msg, dest: self.tq.addTask(dests[dest].transport.datagramReceived, str(msg.toString()), ("10.0.0.2", 5060))
+        self.sip2.sendMessage = lambda msg, dest: self.tq.addTask(dests[dest].transport.datagramReceived, str(msg.toString()), ("10.0.0.1", 5060))
+        self.svc.transport.sendMessage = lambda msg, dest: self.tq.addTask(dests[dest].transport.datagramReceived, str(msg.toString()), ("127.0.0.1", 5060))
+        useragent.Dialog.genTag = lambda self: "314159"
+    def tearDown(self):
+        self.clock.advance(33)
+        reactor.iterate()
+        self.clock.advance(33)
+        reactor.iterate()
+
+    def test3PCC(self):
+
+        self.svc.setupCallBetween(sip.parseAddress("sip:bob@10.0.0.2"),
+                                  sip.parseAddress("sip:alice@10.0.0.1"))
+
+    def testCreateRTPSocket(self):
+        lcp = useragent.LocalControlProtocol(False)
+        lcp.makeConnection(StringTransport())
+        lcp.createRTPSocket("A Dialog", u"server.com")
+        box = juice.parseString(lcp.transport.value())
+        self.assertEquals(box[0]['host'], "server.com")
+        lcp.dataReceived('-Answer: %s\r\nCookie: 123\r\n\r\n' % (box[0]['_ask']))
+        self.assertEquals(lcp.dialogs['123'], "A Dialog")
+        self.assertEquals(lcp.cookies["A Dialog"], '123')
+        
 class CallTerminateTest(FakeClockTestCase):
 
     def setUp(self):

@@ -124,13 +124,13 @@ class SIPServer(Item, Service, InstallableMixin):
         # the intermediary call signalling, such as ending the call
         # early...
         localpart = "clicktocall"
-        host = getHostnames()[0]
+        host = getHostnames(self.store)[0]
         controller = tpcc.ThirdPartyCallController(self.dispatcher, localpart, host, self.mediaController, partyA[0], partyB[1])
         uac = useragent.UserAgent.client(controller, localpart, host, self.mediaController, self.dispatcher.dialogs)
         uac.transport = self.dispatcher.transport
         self.dispatcher.installTemporaryProcessor(sip.URL(host, localpart), uac)
 
-        uac._doCall(partyA[1], "Divmod")
+        uac._doCall(partyA[1], fromName="Divmod")
 
 class Registration(Item):
     typename = "sine_registration"

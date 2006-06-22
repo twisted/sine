@@ -279,7 +279,7 @@ def parseViaHeader(value):
                     value = int(value)
             result[name] = value
         return Via(**result)
-    except:
+    except Exception, e:
         raise SIPError(400)
 
 class URL:

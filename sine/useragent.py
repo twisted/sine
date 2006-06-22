@@ -80,7 +80,7 @@ class LocalControlProtocol(juice.Juice):
     command_DTMF.command = DTMF
 
     def createRTPSocket(self, dialog, host):
-        d = CreateRTPSocket(host=host).do(self)
+        d = CreateRTPSocket(host=str(host)).do(self)
         def remember(response):
             cookie = response['cookie']
             self.dialogs[cookie] = dialog
@@ -817,11 +817,16 @@ class UserAgent(SIPResolverMixin):
         if dialog is None:
             dialog = matchResponseToDialog(response, self.dialogs)
 
+
         if 'INVITE' in response.headers['cseq'][0] and 200 <= response.code < 300:
+            #possibly this line doesn't belong here? earlyResponseReceived
+            #does it too but IIRC it can't come before sending the ack
+            dialog.remoteAddress = parseAddress(response.headers['to'][0])
             self.acknowledgeInvite(dialog, response)
 
         if dialog.clientState == "early":
             self.earlyResponseReceived(dialog, response, ct)
+
         if dialog.clientState == "byeSent":
             self.byeResponseReceived(dialog, response, ct)
         elif dialog.clientState == "reinviteSent":

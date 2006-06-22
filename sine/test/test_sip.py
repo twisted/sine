@@ -1538,8 +1538,6 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
         reactor.iterate()
         self.assertEquals(len(self.proxy2SendQueue), 2)
         self.assertEquals(len(self.proxy1SendQueue), 2)
-        #This order is opposite from RFC3665's diagram
-        #there, the ACK is sent before the 487. I don't know if this matters.
         self.assertMsgEqual(self.proxy2SendQueue[0], bob487Ack)
         self.assertMsgEqual(self.proxy2SendQueue[1], interproxy487)
         self.assertMsgEqual(self.proxy1SendQueue[0], interproxy487Ack)

@@ -1,2 +1,5 @@
+0.1.2 (2006-06-22):
+  - Updated placeCall to work with current Axiom.
+
 0.1.0 (2006-06-12):
   - Initial public release.

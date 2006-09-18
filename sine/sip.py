@@ -1848,6 +1848,19 @@ class Proxy(SIPResolverMixin):
             st.messageReceivedFromTU(
                 responseFromRequest(errcode, msg))
 
+        def _statelessEB(err):
+            # if an error gets raised during stateless processing, an
+            # error response needs to be sent on the transport, since
+            # there is no server transaction.
+
+            if err.check(SIPError):
+                errcode = err.value.code
+            else:
+                errcode = 500
+                log.err(err, "Mishap in stateless request proxy processing")
+            self.transport.sendResponse(responseFromRequest(errcode, msg))
+            return None
+
         if msg.method == 'INVITE':
             st = ServerInviteTransaction(self.transport, self, msg, addr)
             st.messageReceivedFromTU(responseFromRequest(100, msg))
@@ -1864,13 +1877,13 @@ class Proxy(SIPResolverMixin):
                     self.cancelPendingClients(t)
                     break
             else:
-                self.proxyRequestStatelessly(msg)
+                self.proxyRequestStatelessly(msg).addErrback(_statelessEB)
                 return None
         elif msg.method == 'ACK':
             msg.headers['via'].insert(0,Via(self.transport.host, self.transport.port,
                                             rport=True,
                                             branch=computeBranch(msg)).toString())
-            self.proxyRequestStatelessly(msg)
+            self.proxyRequestStatelessly(msg).addErrback(_statelessEB)
             return None
         else:
             st = ServerTransaction(self.transport, self, msg, addr)
@@ -1885,7 +1898,7 @@ class Proxy(SIPResolverMixin):
             msg, addr = self.processRouting(originalMsg, addrs[0])
             self.transport.sendRequest(msg, (addr.host, addr.port))
         fromURL = parseAddress(originalMsg.headers['from'][0])[1]
-        self.findTargets(originalMsg.uri, fromURL).addCallback(_cb)
+        return self.findTargets(originalMsg.uri, fromURL).addCallback(_cb)
 
     def findTargets(self, addr, caller):
         d = self.portal.login(Preauthenticated(addr.toCredString()),

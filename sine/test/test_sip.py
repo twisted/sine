@@ -1,17 +1,19 @@
 # Copyright 2005 Divmod, Inc.  See LICENSE file for details
 
 """Session Initialization Protocol tests."""
+
+import textwrap
+
 from zope.interface import  implements
 
 from twisted.trial import unittest
 from sine import  sip
 from twisted.internet import defer, reactor
-
+from twisted.python import log
 
 from twisted.test import proto_helpers
 
 from twisted import cred
-
 from twisted.cred.error import UnauthorizedLogin
 
 from axiom.errors import NoSuchUser
@@ -1364,6 +1366,7 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
 
     def setUp(self):
         r1 = TestRealm(domain="proxy1.org")
+        r1.permissive = False
         a = FakeAvatar(r1,"alice@proxy1.org")
         a.registerAddress(sip.URL(host="10.0.0.1",username="alice"),3600)
         r1.users['alice@proxy1.org'] = a
@@ -1448,6 +1451,47 @@ class DoubleStatefulProxyTestCase(FakeClockTestCase):
         self.assertMsgEqual(self.proxy2SendQueue[0], interproxy180Response)#F10
         self.assertMsgEqual(self.proxy1SendQueue[0], alice180Response) #F11
         self.resetq()
+
+    def testStatelessLookupFailure(self):
+        """
+        Ensure that error codes get passed upwards from lookup code
+        when doing stateless proxying.
+        """
+        ackRequest = """
+        ACK sip:nobody@proxy1.org SIP/2.0\r
+        Via: SIP/2.0/UDP client.com:5060;branch=z9hG4bK74b76\r
+        Max-Forwards: 70\r
+        Route: <sip:proxy1.org:5060;lr>\r
+        From: Alice <sip:alice@proxy1.org>;tag=9fxced76sl\r
+        To: Bob <sip:bob@proxy2.org>;tag=314159\r
+        Call-ID: 3848276298220188511@client.com\r
+        CSeq: 1 ACK\r
+        \r
+        """
+        ackRequest=textwrap.dedent(ackRequest)
+        self.sip1.datagramReceived(ackRequest, ('10.0.0.1', 5060))
+        self.assertEquals(len(self.proxy1SendQueue), 1)
+        self.testMessages[:] = []
+        self.parser.dataReceived(self.proxy1SendQueue[0])
+        self.parser.dataDone()
+        self.assertEquals(self.testMessages[0].code, 604)
+
+    def testStatelessLookupUnexpectedFailure(self):
+        """
+        If something unexpected gets raised in the proxy processing,
+        we should log an error and send a 500 response.
+        """
+        failures = []
+        self.proxy1.findTargets = lambda uri, caller: defer.fail(RuntimeError()
+                                                                 ).addErrback(lambda e:
+                                                               failures.append(e) or e)
+        self.sip1.datagramReceived(aliceAckRequest, ('10.0.0.1', 5060))
+        self.assertEquals(len(self.proxy1SendQueue), 1)
+        self.testMessages[:] = []
+        self.parser.dataReceived(self.proxy1SendQueue[0])
+        self.parser.dataDone()
+        self.assertEquals(self.testMessages[0].code, 500)
+        self.assertEquals(log.flushErrors(RuntimeError), failures)
 
 
     def testSuccessfulCallFlow(self):

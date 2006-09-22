@@ -395,7 +395,7 @@ class Dialog:
                 invite.body = sdp
                 invite.headers['content-length'] = [str(len(sdp))]
                 invite.creationFinished()
-            return defer.maybeDeferred(self.rtp.getSDP, self, None)
+            return defer.maybeDeferred(self.rtp.getSDP, self, None).addCallback(consultSDP)
 
         def finish(_):
             self.msg = invite

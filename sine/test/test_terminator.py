@@ -157,9 +157,9 @@ class TPCCTest(FakeClockTestCase):
         self.login.installOn(self.store)
         account = self.login.addAccount('bob', 'proxy2.org', None)
         account2 = self.login.addAccount('alice', 'proxy1.org', None)
-        us = account.avatars.open()
+        us = self.us = account.avatars.open()
         FakeAvatar(store=us).installOn(us)
-        us2 = account2.avatars.open()
+        us2 = self.us2 = account2.avatars.open()
         FakeAvatar(store=us2).installOn(us2)
         self.tq = TaskQueue()
         self.uas = useragent.UserAgent.server(sip.IVoiceSystem(us), "10.0.0.2", FakeMediaController())
@@ -177,9 +177,10 @@ class TPCCTest(FakeClockTestCase):
         self.svc.dispatcher.start(self.svc.transport)
         dests = {('10.0.0.2', 5060): self.uas, ('10.0.0.1', 5060): self.uas2,
                  ('127.0.0.1', 5060): self.svc}
+        self.messages = []
         self.sip1.sendMessage = lambda msg, dest: self.tq.addTask(dests[dest].transport.datagramReceived, str(msg.toString()), ("10.0.0.2", 5060))
         self.sip2.sendMessage = lambda msg, dest: self.tq.addTask(dests[dest].transport.datagramReceived, str(msg.toString()), ("10.0.0.1", 5060))
-        self.svc.transport.sendMessage = lambda msg, dest: self.tq.addTask(dests[dest].transport.datagramReceived, str(msg.toString()), ("127.0.0.1", 5060))
+        self.svc.transport.sendMessage = lambda msg, dest: self.messages.append(msg) or self.tq.addTask(dests[dest].transport.datagramReceived, str(msg.toString()), ("127.0.0.1", 5060))
         useragent.Dialog.genTag = lambda self: "314159"
     def tearDown(self):
         self.clock.advance(33)
@@ -192,6 +193,21 @@ class TPCCTest(FakeClockTestCase):
         self.svc.setupCallBetween(sip.parseAddress("sip:bob@10.0.0.2"),
                                   sip.parseAddress("sip:alice@10.0.0.1"))
 
+    def testDialogAddsSDP(self):
+        """
+        Previously, there was a bug where no SDP was attached to
+        certain INVITEs.  This ensures that it gets added.
+        """
+        uac = useragent.UserAgent.server(sip.IVoiceSystem(self.us2), "10.0.0.1", FakeMediaController())
+        d = useragent.Dialog.forClient(uac, sip.URL(uac.host, "clicktocall"), sip.URL("10.0.0.2", "bob"), None, False, '')
+        def invite(dlg):
+            return dlg._generateInvite(sip.URL("localhost", "clicktocall"), "", sip.URL("10.0.0.2", "bob"), False)
+        def test(dlg):
+            sdplines = dlg.msg.body.split('\r\n')
+            #There needs to be a m= line at a minimum, probably some other stuff.
+            self.failIfEqual([line for line in sdplines if line.startswith("m=")], [])
+        return d.addCallback(invite).addCallback(test)
+
     def testCreateRTPSocket(self):
         lcp = useragent.LocalControlProtocol(False)
         lcp.makeConnection(StringTransport())
@@ -201,7 +217,7 @@ class TPCCTest(FakeClockTestCase):
         lcp.dataReceived('-Answer: %s\r\nCookie: 123\r\n\r\n' % (box[0]['_ask']))
         self.assertEquals(lcp.dialogs['123'], "A Dialog")
         self.assertEquals(lcp.cookies["A Dialog"], '123')
-        
+
 class CallTerminateTest(FakeClockTestCase):
 
     def setUp(self):

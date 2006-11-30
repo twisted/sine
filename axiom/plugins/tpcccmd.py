@@ -2,7 +2,6 @@ from twisted.application.service import IService, Service
 
 from axiom import scheduler, userbase, item, attributes
 from axiom.scripts import axiomatic
-from axiom.dependency import installOn
 
 from sine import sipserver, sip
 
@@ -20,8 +19,12 @@ class TPCC(axiomatic.AxiomaticCommand):
 
     def postOptions(self):
         s = self.parent.getStore()
-        svc = s.findOrCreate(sipserver.SIPDispatcherService, lambda svc: installOn(svc, s))
-        testsvc = s.findOrCreate(TestService, lambda i: installOn(i, s), dispatcherSvc=svc)
+        s.findOrCreate(scheduler.Scheduler).installOn(s)
+        s.findOrCreate(userbase.LoginSystem).installOn(s)
+        svc = s.findOrCreate(sipserver.SIPDispatcherService)
+        svc.installOn(s)
+        testsvc = s.findOrCreate(TestService, dispatcherSvc=svc)
+        testsvc.installOn(s)
 
 class TestService(item.Item, Service):
     typeName = 'sine_tpcc_test_service'
@@ -33,7 +36,9 @@ class TestService(item.Item, Service):
 
     dispatcherSvc = attributes.reference()
 
-    powerupInterfaces = (IService)
+    def installOn(self, other):
+        other.powerUp(self, IService)
+        self.installedOn = other
 
     def startService(self):
         print "YAY"

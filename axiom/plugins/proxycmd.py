@@ -1,6 +1,5 @@
 from twisted.python import usage
 from axiom.scripts import axiomatic
-from axiom.dependency import installOn
 from axiom import userbase, scheduler
 from sine import sipserver
 
@@ -16,13 +15,16 @@ class Install(axiomatic.AxiomaticSubCommand):
          'SIP URL that PSTN calls should be directed to.' ),
         ]
 
-
     def postOptions(self):
         s = self.parent.getStore()
         svc = s.findOrCreate(sipserver.SIPServer,
                              portno=int(self['port']),
                              pstn=self['pstn'])
-        installOn(svc, s)
+        svc.installOn(s)
+
+        s.findOrCreate(scheduler.Scheduler).installOn(s)
+        s.findOrCreate(userbase.LoginSystem).installOn(s)
+
 
 class Register(axiomatic.AxiomaticSubCommand):
     "Add an account on another host for the proxy to register with on startup."

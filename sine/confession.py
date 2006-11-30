@@ -1,13 +1,11 @@
 # VoIP confession booth -- because angst is easier to convey with your voice
 
-from axiom.item import Item
+from axiom.item import Item, InstallableMixin
+from axiom.slotmachine import hyper as super
 from xmantissa import website, webapp, ixmantissa
-
 from zope.interface import implements
 from sine import sip, useragent, sipserver
 from axiom.attributes import inmemory, reference, integer, text, bytes, timestamp
-from axiom.dependency import dependsOn, installOn
-
 from twisted.internet import reactor
 from twisted.python import filepath, log
 from nevow import static
@@ -30,20 +28,15 @@ class ConfessionBenefactor(Item):
 
     localHost = bytes()
 
-class ConfessionUser(Item):
-    implements(useragent.ICallControllerFactory)
+    def endow(self, ticket, avatar):
+        self.endowed += 1
 
-    typeName = "sine_confession_user"
-    schemaVersion = 1
+        avatar.findOrCreate(website.WebSite).installOn(avatar)
+        avatar.findOrCreate(webapp.PrivateApplication).installOn(avatar)
+        avatar.findOrCreate(ConfessionUser).installOn(avatar)
+        avatar.findOrCreate(ConfessionDispatcher, localHost=self.localHost).installOn(avatar)
 
-    installedOn = reference()
-
-    powerupInterfaces = (useragent.ICallControllerFactory)
-
-    def buildCallController(self, dialog):
-        return ConfessionCall(self)
-
-class ConfessionDispatcher(Item):
+class ConfessionDispatcher(Item, InstallableMixin):
     implements(sip.IVoiceSystem)
     typeName = "sine_confession_dispatcher"
     schemaVersion = 1
@@ -52,10 +45,9 @@ class ConfessionDispatcher(Item):
     localHost = bytes()
     uas = inmemory()
 
-    confessionUser = dependsOn(ConfessionUser)
-
-    powerupInterfaces = (sip.IVoiceSystem)
-
+    def installOn(self, other):
+        super(ConfessionDispatcher, self).installOn(other)
+        other.powerUp(self, sip.IVoiceSystem)
     def activate(self):
         svc = self.store.parent.findUnique(sipserver.SIPServer)
         self.uas = useragent.UserAgent.server(self, self.localHost, svc.mediaController)
@@ -69,9 +61,24 @@ class ConfessionDispatcher(Item):
 
     def localElementByName(self, name):
         if name == 'confession':
-            return self.confessionUser
+            return useragent.ICallControllerFactory(self.store)
         else:
             raise sip.SIPLookupError(404)
+
+class ConfessionUser(Item, InstallableMixin):
+    implements(useragent.ICallControllerFactory)
+
+    typeName = "sine_confession_user"
+    schemaVersion = 1
+
+    installedOn = reference()
+
+    def installOn(self, other):
+        super(ConfessionUser, self).installOn(other)
+        other.powerUp(self, useragent.ICallControllerFactory)
+
+    def buildCallController(self, dialog):
+        return ConfessionCall(self)
 
 class ConfessionCall(object):
     __metaclass__ = ModalType
@@ -111,7 +118,7 @@ class ConfessionCall(object):
     def saveRecording(self, store):
         r = Recording(store=store, fromAddress=unicode(self.fromAddress))
         r.audioFromFile(self.filename)
-        installOn(r, store)
+        r.installOn(store)
 
 
     def playReviewMessage(self, dialog):
@@ -191,11 +198,10 @@ class Recording(Item, website.PrefixURLMixin):
         super(Recording, self).__init__(**args)
         self.time = Time()
 
-    def __getPowerupInterfaces__(self, powerups):
-        #XXX this /is/ bad.
+    def installOn(self, other):
+        #XXX is this bad? I don't know anymore
         self.prefixURL = unicode("private/recordings/%s.wav" % str(self.storeID))
-        return website.PrefixURLMixin.__getPowerupInterfaces__(self, powerups)
-
+        super(Recording, self).installOn(other)
     def getFile(self):
         dir = self.store.newDirectory("recordings")
         if not dir.exists():
@@ -216,7 +222,7 @@ class Recording(Item, website.PrefixURLMixin):
 
 
 
-class AnonConfessionUser(Item):
+class AnonConfessionUser(Item, InstallableMixin):
     implements(useragent.ICallControllerFactory)
 
     typeName = "sine_anonconfession_user"
@@ -224,7 +230,9 @@ class AnonConfessionUser(Item):
 
     installedOn = reference()
 
-    powerupInterfaces = (useragent.ICallControllerFactory)
+    def installOn(self, other):
+        super(AnonConfessionUser, self).installOn(other)
+        other.powerUp(self, useragent.ICallControllerFactory)
 
     def buildCallController(self, dialog):
         return ConfessionCall(self, True)

@@ -3,7 +3,6 @@ from axiom import userbase
 from xmantissa import website, offering, provisioning
 
 from sine import sipserver, sinetheme
-from sine.voicemail import VoicemailDispatcher
 
 sineproxy = provisioning.BenefactorFactory(
     name = u'sineproxy',
@@ -24,10 +23,7 @@ plugin = offering.Offering(
 
     appPowerups = (sipserver.SinePublicPage,
         ),
-    installablePowerups = [("SIP", "Gives user a SIP URL and the ability to send and receive calls through a SIP proxy",
-                            sipserver.TrivialContact),
-                           ("Voicemail", "Records voicemail for calls to user's SIP URL when no user agent is registered.",
-                            VoicemailDispatcher)],
+
     benefactorFactories = (sineproxy,),
     loginInterfaces=(),
     themes = (sinetheme.SineTheme('base'),)

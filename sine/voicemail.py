@@ -1,10 +1,13 @@
 from sine import sip, sipserver, useragent
 from axiom import userbase, item
 from axiom.attributes import inmemory, bytes, reference
+from axiom.dependency import dependsOn
+
 from twisted.internet import defer
 from zope.interface import implements
+from sine.confession import AnonConfessionUser
 
-class VoicemailDispatcher(item.Item, item.InstallableMixin):
+class VoicemailDispatcher(item.Item):
 
     implements(sip.IVoiceSystem)
     typeName = "sine_voicemail_dispatcher"
@@ -14,9 +17,8 @@ class VoicemailDispatcher(item.Item, item.InstallableMixin):
     localHost = bytes()
     uas = inmemory()
 
-    def installOn(self, other):
-        super(VoicemailDispatcher, self).installOn(other)
-        other.powerUp(self, sip.IVoiceSystem)
+    powerupInterfaces = (sip.IVoiceSystem)
+    voicemailUser = dependsOn(AnonConfessionUser)
     def activate(self):
         svc = self.store.parent.findUnique(sipserver.SIPServer)
         if svc:
@@ -43,7 +45,7 @@ class VoicemailDispatcher(item.Item, item.InstallableMixin):
 
     def localElementByName(self, n):
         for name, domain in userbase.getAccountNames(self.store, protocol=u'sip'):
-            #if we got here, we have a SIP account...
+            #if we got here, we hav a SIP account...
             return useragent.ICallControllerFactory(self.store)
 
 

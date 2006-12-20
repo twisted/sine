@@ -1,10 +1,10 @@
-from axiom.item import Item, InstallableMixin
+from axiom.item import Item 
 from zope.interface import implements
 from sine import sip, useragent
 from axiom.attributes import reference, inmemory, bytes
 
 import os
-class EchoDispatcher(Item, InstallableMixin):
+class EchoDispatcher(Item):
     implements(sip.IVoiceSystem)
     typeName = "sine_echo_dispatcher"
     schemaVersion = 1
@@ -13,9 +13,8 @@ class EchoDispatcher(Item, InstallableMixin):
     localHost = bytes()
     uas = inmemory()
 
-    def installOn(self, other):
-        super(EchoDispatcher, self).installOn(other)
-        other.powerUp(self, sip.IVoiceSystem)
+    powerupInterfaces = (sip.IVoiceSystem,)
+
     def activate(self):
         self.uas = useragent.UserAgent.server(self, self.localHost)
 
@@ -54,7 +53,7 @@ class Echoer:
         pass
     def callFailed(self, dialog, msg):
         pass
-class EchoTest(Item, InstallableMixin, Echoer):
+class EchoTest(Item, Echoer):
     implements(useragent.ICallControllerFactory, useragent.ICallController)
 
     typeName = "sine_echo_test"
@@ -65,6 +64,4 @@ class EchoTest(Item, InstallableMixin, Echoer):
     def buildCallController(self, dialog):
         return self
 
-    def installOn(self, other):
-        super(EchoTest, self).installOn(other)
-        other.powerUp(self, useragent.ICallControllerFactory)
+    powerupInterfaces = (useragent.ICallControllerFactory,)

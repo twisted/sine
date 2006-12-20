@@ -6,8 +6,7 @@ from twisted.python.util import sibpath
 from twisted.internet import reactor, defer
 from twisted.python.components import registerAdapter
 from twisted.application.service import IService, Service
-from twisted.cred.portal import IRealm, Portal
-from twisted.cred.checkers import ICredentialsChecker
+from twisted.cred.portal import Portal
 
 from nevow import athena, tags, static
 
@@ -15,10 +14,14 @@ from epsilon.extime import Time
 
 from axiom import userbase, batch
 from axiom.attributes import integer, inmemory, bytes, text, reference, timestamp
-from axiom.item import Item, InstallableMixin
+from axiom.item import Item
 from axiom.errors import NoSuchUser
+from axiom.userbase import LoginSystem
+from axiom.scheduler import Scheduler
+from axiom.dependency import dependsOn
+from axiom.upgrade import registerUpgrader
 
-from xmantissa import ixmantissa, website, webapp, liveform
+from xmantissa import ixmantissa, liveform
 from xmantissa import webnav, tdb, tdbview
 from xmantissa.webtheme import getLoader
 from xmantissa.publicresource import PublicPage
@@ -39,11 +42,10 @@ def getHostnames(store):
     return userbase.getDomainNames(store) or ['localhost']
 
 
-class SIPServer(Item, Service, InstallableMixin):
+class SIPServer(Item, Service):
     typeName = 'mantissa_sip_powerup'
-    schemaVersion = 1
+    schemaVersion = 2
     portno = integer(default=5060)
-    installedOn = reference()
     pstn = bytes()
     parent = inmemory()
     running = inmemory()
@@ -56,24 +58,15 @@ class SIPServer(Item, Service, InstallableMixin):
     site = inmemory()
     transport = inmemory()
 
-    def installOn(self, other):
-        super(SIPServer, self).installOn(other)
-        other.powerUp(self, IService)
-        if self.parent is None:
-            self.setServiceParent(other)
+    scheduler = dependsOn(Scheduler)
+    userbase = dependsOn(LoginSystem)
+
+    powerupInterfaces = (IService,)
+
+    def installed(self):
+        self.setServiceParent(self.store)
 
     def startService(self):
-        realm = IRealm(self.store, None)
-        if realm is None:
-            raise SIPConfigurationError(
-                'No realm: '
-                'you need to install a userbase before using this service.')
-        chkr = ICredentialsChecker(self.store, None)
-        if chkr is None:
-            raise SIPConfigurationError(
-                'No checkers: '
-                'you need to install a userbase before using this service.')
-
         tacPath = sibpath(sine.__file__, "media.tac")
         self.mediaController = batch.ProcessController(
             "rtp-transceiver",
@@ -82,9 +75,9 @@ class SIPServer(Item, Service, InstallableMixin):
 
         if self.pstn:
             pstnurl = sip.parseURL(self.pstn)
-            portal = PSTNPortalWrapper(Portal(realm, [chkr]), pstnurl.host, pstnurl.port)
+            portal = PSTNPortalWrapper(Portal(self.userbase, [self.userbase]), pstnurl.host, pstnurl.port)
         else:
-            portal = Portal(realm, [chkr])
+            portal = Portal(self.userbase, [self.userbase])
         self.proxy = sip.Proxy(portal)
         self.dispatcher = sip.SIPDispatcher(portal, self.proxy)
         regs = list(self.store.query(Registration, Registration.parent==self))
@@ -132,6 +125,16 @@ class SIPServer(Item, Service, InstallableMixin):
 
         uac._doCall(partyA[1], fromName="Divmod")
 
+def sipServer1to2(old):
+    ss = old.upgradeVersion(old.typeName, 1, 2)
+    ss.portno = old.portno
+    ss.pstn = old.pstn
+    ss.scheduler = old.store.findOrCreate(Scheduler)
+    ss.userbase = old.store.findOrCreate(LoginSystem)
+    return ss
+
+registerUpgrader(sipServer1to2, SIPServer.typeName, 1, 2)
+
 class Registration(Item):
     typename = "sine_registration"
     schemaVersion = 1
@@ -155,17 +158,14 @@ class ListenToRecordingAction(tdbview.Action):
     def actionable(self, thing):
         return True
 
-class SinePublicPage(Item, InstallableMixin):
+class SinePublicPage(Item):
     implements(ixmantissa.IPublicPage)
 
     typeName = 'sine_public_page'
     schemaVersion = 1
 
     installedOn = reference()
-
-    def installOn(self, other):
-        super(SinePublicPage, self).installOn(other)
-        other.powerUp(self, ixmantissa.IPublicPage)
+    powerupInterfaces = (ixmantissa.IPublicPage,)
 
     def getResource(self):
         return PublicIndexPage(self,
@@ -194,17 +194,6 @@ class SineBenefactor(Item):
     domain=text()
     # Number of users this benefactor has endowed
     endowed = integer(default = 0)
-
-    def endow(self, ticket, avatar):
-        self.endowed += 1
-        avatar.findOrCreate(website.WebSite).installOn(avatar)
-        avatar.findOrCreate(webapp.PrivateApplication).installOn(avatar)
-        avatar.findOrCreate(TrivialContact).installOn(avatar)
-        from sine import voicemail, confession
-        avatar.findOrCreate(voicemail.VoicemailDispatcher).installOn(avatar)
-        avatar.findOrCreate(confession.AnonConfessionUser).installOn(avatar)
-
-
 
 class PSTNContact:
     implements(sip.IContact)
@@ -257,7 +246,7 @@ class PSTNPortalWrapper:
 
 
 
-class TrivialContact(Item, InstallableMixin):
+class TrivialContact(Item):
     implements(sip.IContact, ixmantissa.INavigableElement)
 
     typeName = "sine_trivialcontact"
@@ -268,10 +257,7 @@ class TrivialContact(Item, InstallableMixin):
     expiryTime = timestamp()
     installedOn = reference()
 
-    def installOn(self, other):
-        super(TrivialContact, self).installOn(other)
-        other.powerUp(self, ixmantissa.INavigableElement)
-        other.powerUp(self, sip.IContact)
+    powerupInterfaces = (ixmantissa.INavigableElement, sip.IContact)
 
     def registerAddress(self, physicalURL, expiryTime):
         self.physicalURL = physicalURL.toString()
@@ -404,11 +390,10 @@ registerAdapter(TrivialContactFragment, TrivialContact, ixmantissa.INavigableFra
 
 
 
-class SIPDispatcherService(Item, InstallableMixin, Service):
+class SIPDispatcherService(Item, Service):
     typeName = 'sine_sipdispatcher_service'
-    schemaVersion = 1
+    schemaVersion = 2
     portno = integer(default=5060)
-    installedOn = reference()
 
     parent = inmemory()
     running = inmemory()
@@ -419,29 +404,28 @@ class SIPDispatcherService(Item, InstallableMixin, Service):
     port = inmemory()
     site = inmemory()
 
-    def installOn(self, other):
-        super(SIPDispatcherService, self).installOn(other)
-        other.powerUp(self, IService)
+    scheduler = dependsOn(Scheduler)
+    userbase = dependsOn(LoginSystem)
+
+    powerupInterfaces = (IService,)
 
 
     def privilegedStartService(self):
-        realm = IRealm(self.store, None)
-        if realm is None:
-            raise SIPConfigurationError(
-                'No realm: '
-                'you need to install a userbase before using this service.')
-        chkr = ICredentialsChecker(self.store, None)
-        if chkr is None:
-            raise SIPConfigurationError(
-                'No checkers: '
-                'you need to install a userbase before using this service.')
-        portal = Portal(realm, [chkr])
+        portal = Portal(self.userbase, [self.userbase])
         self.proxy = sip.Proxy(portal)
         self.dispatcher = sip.SIPDispatcher(portal, self.proxy)
         f = sip.SIPTransport(self.dispatcher, getHostnames(self.store), self.portno)
         self.port = reactor.listenUDP(self.portno, f)
 
 
+def sipDispatcher1to2(old):
+    ss = old.upgradeVersion(old.typeName, 1, 2)
+    ss.portno = old.portno
+    ss.scheduler = old.store.findOrCreate(Scheduler)
+    ss.userbase = old.store.findOrCreate(LoginSystem)
+    return ss
+
+registerUpgrader(sipDispatcher1to2, SIPDispatcherService.typeName, 1, 2)
 
 class Call(Item):
     typeName = "sine_call"

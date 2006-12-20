@@ -8,6 +8,8 @@ from twisted.test.proto_helpers import StringTransport
 from twisted.cred.portal import Portal
 from zope.interface import implements
 from axiom import store, userbase, item, attributes
+from axiom.dependency import installOn
+
 from epsilon import juice, hotfix
 hotfix.require("twisted", "proto_helpers_stringtransport")
 
@@ -97,18 +99,15 @@ Content-Length: 0\r
 \r
 """
 
-class FakeAvatar(item.Item, item.InstallableMixin):
-    typeName = "fakeavatar"
-    schemaVersion = 1
-    installedOn = attributes.reference()
+class FakeAvatar(item.Item):
     implements(sip.IVoiceSystem)
+
+    attr = attributes.reference(doc="an attribute")
+    powerupInterfaces = (sip.IVoiceSystem,)
+
     def localElementByName(self, name):
         return FakeCallRecipient()
 
-
-    def installOn(self, other):
-        super(FakeAvatar, self).installOn(other)
-        other.powerUp(self, sip.IVoiceSystem)
 
 class FakeCallRecipient:
     implements(useragent.ICallControllerFactory, useragent.ICallController)
@@ -154,13 +153,13 @@ class TPCCTest(FakeClockTestCase):
         self.dbdir = self.mktemp()
         self.store = store.Store(self.dbdir)
         self.login = userbase.LoginSystem(store=self.store)
-        self.login.installOn(self.store)
+        installOn(self.login, self.store)
         account = self.login.addAccount('bob', 'proxy2.org', None)
         account2 = self.login.addAccount('alice', 'proxy1.org', None)
         us = self.us = account.avatars.open()
-        FakeAvatar(store=us).installOn(us)
+        installOn(FakeAvatar(store=us), us)
         us2 = self.us2 = account2.avatars.open()
-        FakeAvatar(store=us2).installOn(us2)
+        installOn(FakeAvatar(store=us2), us2)
         self.tq = TaskQueue()
         self.uas = useragent.UserAgent.server(sip.IVoiceSystem(us), "10.0.0.2", FakeMediaController())
         self.uas2 = useragent.UserAgent.server(sip.IVoiceSystem(us2), "10.0.0.1", FakeMediaController())
@@ -224,10 +223,10 @@ class CallTerminateTest(FakeClockTestCase):
         self.dbdir = self.mktemp()
         self.store = store.Store(self.dbdir)
         self.login = userbase.LoginSystem(store=self.store)
-        self.login.installOn(self.store)
+        installOn(self.login, self.store)
         account = self.login.addAccount('bob', 'proxy2.org', None)
         us = account.avatars.open()
-        FakeAvatar(store=us).installOn(us)
+        installOn(FakeAvatar(store=us), us)
         self.uas = useragent.UserAgent.server(sip.IVoiceSystem(us), "127.0.0.2", FakeMediaController())
         self.sent = []
         self.sip = sip.SIPTransport(self.uas, ["server.com"], 5060)

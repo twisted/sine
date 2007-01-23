@@ -195,6 +195,8 @@ class SineBenefactor(Item):
     # Number of users this benefactor has endowed
     endowed = integer(default = 0)
 
+    powerupNames = ['sine.sipserver.TrivialContact']
+
 class PSTNContact:
     implements(sip.IContact)
     def __init__(self, avatarId, targethost, targetport):

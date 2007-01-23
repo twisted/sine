@@ -1,5 +1,6 @@
 from sine import sip, sipserver, useragent
 from axiom import userbase, item
+from axiom.upgrade import registerUpgrader
 from axiom.attributes import inmemory, bytes, reference
 from axiom.dependency import dependsOn
 
@@ -11,19 +12,19 @@ class VoicemailDispatcher(item.Item):
 
     implements(sip.IVoiceSystem)
     typeName = "sine_voicemail_dispatcher"
-    schemaVersion = 1
+    schemaVersion = 2
 
-    installedOn = reference()
     localHost = bytes()
     uas = inmemory()
 
     powerupInterfaces = (sip.IVoiceSystem,)
     voicemailUser = dependsOn(AnonConfessionUser)
     def activate(self):
-        svc = self.store.parent.findUnique(sipserver.SIPServer)
-        if svc:
-            self.uas = useragent.UserAgent.server(self, svc.transport.host, svc.mediaController)
-            self.uas.transport = svc.transport
+        if self.store.parent:
+            svc = self.store.parent.findUnique(sipserver.SIPServer)
+            if svc:
+                self.uas = useragent.UserAgent.server(self, svc.transport.host, svc.mediaController)
+                self.uas.transport = svc.transport
 
     def lookupProcessor(self, msg, dialogs):
         if isinstance(msg, sip.Request) and msg.method == "REGISTER":
@@ -51,3 +52,14 @@ class VoicemailDispatcher(item.Item):
 
 
 
+item.declareLegacyItem(VoicemailDispatcher.typeName, 1, dict(
+    localHost=bytes(),
+    installedOn=reference()))
+
+def _voicemailDispatcher1to2(old):
+    df = old.upgradeVersion(VoicemailDispatcher.typeName, 1, 2,
+                            localHost=old.localHost,
+                            voicemailUser=old.store.findOrCreate(
+        AnonConfessionUser))
+    return df
+registerUpgrader(_voicemailDispatcher1to2, VoicemailDispatcher.typeName, 1, 2)

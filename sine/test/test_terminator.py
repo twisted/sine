@@ -1,8 +1,8 @@
 from xshtoom.sdp import SDP, MediaDescription
 from xshtoom.rtp.formats import PT_PCMU
-from sine.test.test_sip import FakeClockTestCase, TaskQueue
+from sine.test.test_sip import  TaskQueue
 from sine import sip, useragent, sipserver
-from twisted.internet import reactor, defer
+from twisted.internet import reactor, defer, task
 from twisted.trial import unittest
 from twisted.test.proto_helpers import StringTransport
 from twisted.cred.portal import Portal
@@ -147,9 +147,10 @@ class FakeMediaController:
                 return defer.succeed({'done': "True"})
         return defer.succeed(FakeRTP())
 
-class TPCCTest(FakeClockTestCase):
+class TPCCTest(unittest.TestCase):
 
     def setUp(self):
+        self.clock = sip.clock = task.Clock()
         self.dbdir = self.mktemp()
         self.store = store.Store(self.dbdir)
         self.login = userbase.LoginSystem(store=self.store)
@@ -160,7 +161,7 @@ class TPCCTest(FakeClockTestCase):
         installOn(FakeAvatar(store=us), us)
         us2 = self.us2 = account2.avatars.open()
         installOn(FakeAvatar(store=us2), us2)
-        self.tq = TaskQueue()
+        self.tq = TaskQueue(self.clock)
         self.uas = useragent.UserAgent.server(sip.IVoiceSystem(us), "10.0.0.2", FakeMediaController())
         self.uas2 = useragent.UserAgent.server(sip.IVoiceSystem(us2), "10.0.0.1", FakeMediaController())
         self.sip1 = sip.SIPTransport(self.uas, ["server.com"], 5060)
@@ -183,9 +184,10 @@ class TPCCTest(FakeClockTestCase):
         useragent.Dialog.genTag = lambda self: "314159"
     def tearDown(self):
         self.clock.advance(33)
-        reactor.iterate()
         self.clock.advance(33)
-        reactor.iterate()
+
+    def tearDown(self):
+        sip.clock = reactor
 
     def test3PCC(self):
 
@@ -217,7 +219,7 @@ class TPCCTest(FakeClockTestCase):
         self.assertEquals(lcp.dialogs['123'], "A Dialog")
         self.assertEquals(lcp.cookies["A Dialog"], '123')
 
-class CallTerminateTest(FakeClockTestCase):
+class CallTerminateTest(unittest.TestCase):
 
     def setUp(self):
         self.dbdir = self.mktemp()
@@ -234,15 +236,14 @@ class CallTerminateTest(FakeClockTestCase):
         self.sip.sendMessage = lambda dest, msg: self.sent.append((dest, msg))
         self.testMessages = []
         self.parser = sip.MessagesParser(self.testMessages.append)
-
+        self.clock = sip.clock = task.Clock()
         #XXX this is probably not good
         useragent.Dialog.genTag = lambda self: "314159"
 
     def tearDown(self):
         self.clock.advance(33)
-        reactor.iterate()
         self.clock.advance(33)
-        reactor.iterate()
+        sip.clock = reactor
 
     def assertMsgEqual(self, first, second):
         self.testMessages[:] = []
@@ -298,7 +299,7 @@ class CallTerminateTest(FakeClockTestCase):
                                  [str(x) for x in second.headers[header]])
     def testCallTermination(self):
         self.sip.datagramReceived(exampleInvite, ('10.0.0.1', 5060))
-        reactor.iterate()
+        self.clock.advance(0)
         self.assertEquals(len(self.sent), 1)
         self.assertMsgEqual(self.sent[0][0], response200)
         self.sent = []

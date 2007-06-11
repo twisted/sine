@@ -8,7 +8,7 @@ from zope.interface import  implements
 
 from twisted.trial import unittest
 from sine import  sip
-from twisted.internet import defer, reactor, task
+from twisted.internet import defer, reactor
 from twisted.python import log
 
 from twisted.test import proto_helpers
@@ -468,11 +468,19 @@ CSeq: 1 INVITE\r
 Contact: <sip:alice@client.com>\r
 \r
 """
+class TestClock:
+    time = 0
+    def seconds(self):
+        # Make sure that callLater(0) works for sure
+        self.advance(0.0000001)
+        return self.time
+
+    def advance(self, n):
+        self.time += n
 
 class TaskQueue(object):
 
-    def __init__(self, clock):
-        self.clock = clock
+    def __init__(self):
         self.tasks = []
         self.later = None
         self.flushd = None
@@ -488,7 +496,7 @@ class TaskQueue(object):
 
     def addTask(self, f, *a, **k):
         self.tasks.append((f, a, k))
-        self.later = self.clock.callLater(0, self.flush)
+        self.later = reactor.callLater(0, self.flush)
 
     def uponCompletion(self):
         if self.later is None:
@@ -497,7 +505,25 @@ class TaskQueue(object):
         return self.flushd
 
 
-class ProxyTestCase(unittest.TestCase):
+class FakeClockTestCase(unittest.TestCase):
+    # Do NOT, EVER, leave base.seconds set to something other than its
+    # original value when you finish the test. If you do, other tests
+    # (possibly just one) will fail and debugging will be very very
+    # difficult.
+    def setUpClass(self):
+        from twisted.internet import base
+
+        self.clock = TestClock()
+        self.originalSeconds = base.seconds
+        base.seconds = self.clock.seconds
+
+    def tearDownClass(self):
+        from twisted.internet import base
+        base.seconds = self.originalSeconds
+
+
+
+class ProxyTestCase(FakeClockTestCase):
 
     def setUp(self):
         self.tasks = []
@@ -510,11 +536,9 @@ class ProxyTestCase(unittest.TestCase):
         self.sip.startProtocol()
         self.proxy._lookupURI = lambda uri: defer.succeed([(testurls.get(uri.host, uri.host), 5060)])
         self.sip.sendMessage = lambda dest, msg: self.sent.append((dest, msg))
-        self.clock = sip.clock = task.Clock()
+
     def tearDown(self):
-        def finish(_):
-            sip.clock = reactor
-        return self.sip.stopTransport(hard=True).addCallback(finish)
+        return self.sip.stopTransport(hard=True)
 
     def testRequestForward(self):
         self.sip.datagramReceived(exampleInvite, (testurls["client.com"], 5060))
@@ -569,7 +593,7 @@ class ProxyTestCase(unittest.TestCase):
         self.assertEquals(dest, (testurls["client.com"], 5060))
         self.assertEquals(m.headers["via"], ['SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9;received=10.0.0.1'])
 
-class RegistrationTestCase(unittest.TestCase):
+class RegistrationTestCase(FakeClockTestCase):
 
     def setUp(self):
         self.realm = TestRealm("proxy.com")
@@ -585,7 +609,6 @@ class RegistrationTestCase(unittest.TestCase):
         self.transport.startProtocol()
         self.sent = []
         self.proxy._lookupURI = lambda uri: [(uri.host, uri.port)]
-        self.clock = sip.clock = task.Clock()
         def sm(msg, dest):
             self.sent.append((dest, msg))
         self.transport.sendMessage = sm
@@ -595,7 +618,7 @@ class RegistrationTestCase(unittest.TestCase):
 
     def tearDown(self):
         self.clock.advance(33)
-        sip.clock = reactor
+
     def testWontForwardRequest(self):
         r = sip.Request("INVITE", "sip:joe@server.com")
         r.addHeader("via", sip.Via("1.2.3.4", branch="z9hG4bKA").toString())
@@ -769,7 +792,7 @@ class Client:
     def sendMessage(self, msg, *etc):
         pass
 
-class LiveTest(unittest.TestCase):
+class LiveTest(FakeClockTestCase):
 
     def setUp(self):
         r = TestRealm('proxy.com')
@@ -788,13 +811,11 @@ class LiveTest(unittest.TestCase):
         self.serverPortNo = self.serverPort.getHost().port
         self.transport.port = self.serverPortNo
         self.clientTransport.port = self.clientPort.getHost().port
-        self.clock = sip.clock = task.Clock()
 
     def tearDown(self):
         self.clientPort.stopListening()
         self.serverPort.stopListening()
         self.transport.stopTransport(True)
-        sip.clock = reactor
 
     def testRegister(self):
         p = self.clientPort.getHost().port
@@ -874,7 +895,7 @@ class FakeDigestAuthorizer(sip.DigestAuthorizer):
 
 
 
-class AuthorizationTestCase(unittest.TestCase):
+class AuthorizationTestCase(FakeClockTestCase):
 
     def setUp(self):
         r = TestRealm("intarweb.us")
@@ -892,11 +913,9 @@ class AuthorizationTestCase(unittest.TestCase):
         reg.authorizers['digest'] = FakeDigestAuthorizer()
         self.transport = proto_helpers.FakeDatagramTransport()
         self.siptransport.transport = self.transport
-        self.clock = sip.clock = task.Clock()
+
     def tearDown(self):
         self.clock.advance(32)
-        sip.clock = reactor
-
     def testChallenge(self):
         self.siptransport.datagramReceived(registerRequest,
                                            ("127.0.0.1", 5632))
@@ -1342,7 +1361,7 @@ CSeq: 1 ACK\r
 \r
 """
 
-class DoubleStatefulProxyTestCase(unittest.TestCase):
+class DoubleStatefulProxyTestCase(FakeClockTestCase):
     # Double the fun! Double the pain! Or double your money back!
 
     def setUp(self):
@@ -1367,8 +1386,8 @@ class DoubleStatefulProxyTestCase(unittest.TestCase):
                                      ["proxy2.org", "10.1.0.2"], 5060)
         self.testMessages = []
         self.parser = sip.MessagesParser(self.testMessages.append)
-        self.clock = task.Clock()
-        self.eventQueue = TaskQueue(self.clock)
+        self.eventQueue = TaskQueue()
+
         self.sip1.startProtocol()
         self.sip2.startProtocol()
 
@@ -1399,11 +1418,8 @@ class DoubleStatefulProxyTestCase(unittest.TestCase):
         self.sip1.transport = ft1
         self.sip2.transport = ft2
 
-        self.proxy1._lookupURI = self.proxy2._lookupURI = lambda uri: defer.succeed([(testurls.get(uri.host, uri.host), 5060)])
-        sip.clock = self.clock
 
-    def tearDown(self):
-        sip.clock = reactor
+        self.proxy1._lookupURI = self.proxy2._lookupURI = lambda uri: defer.succeed([(testurls.get(uri.host, uri.host), 5060)])
 
     def assertMsgEqual(self, first, second):
         self.testMessages[:] = []
@@ -1415,7 +1431,7 @@ class DoubleStatefulProxyTestCase(unittest.TestCase):
 
     def invite(self):
         self.sip1.datagramReceived(aliceInvite, ('10.0.0.1', 5060)) # F4
-        self.clock.advance(0)
+        reactor.iterate()
         self.assertEquals(len(self.proxy1SendQueue), 2)
         self.assertEquals(len(self.proxy2SendQueue), 2)
 
@@ -1429,7 +1445,7 @@ class DoubleStatefulProxyTestCase(unittest.TestCase):
     def inviteAnd180(self):
         self.invite()
         self.sip2.datagramReceived(bob180Response, ("10.0.0.2", 5060)) # F9
-        self.clock.advance(0)
+        reactor.iterate()
         self.assertEquals(len(self.proxy2SendQueue), 1)
         self.assertEquals(len(self.proxy1SendQueue), 1)
         self.assertMsgEqual(self.proxy2SendQueue[0], interproxy180Response)#F10
@@ -1475,7 +1491,7 @@ class DoubleStatefulProxyTestCase(unittest.TestCase):
         self.parser.dataReceived(self.proxy1SendQueue[0])
         self.parser.dataDone()
         self.assertEquals(self.testMessages[0].code, 500)
-        self.assertEquals(self.flushLoggedErrors(RuntimeError), failures)
+        self.assertEquals(log.flushErrors(RuntimeError), failures)
 
 
     def testSuccessfulCallFlow(self):
@@ -1544,16 +1560,16 @@ class DoubleStatefulProxyTestCase(unittest.TestCase):
 
 
         for step in [step1, step2, step3, step4, step5, step6]:
-            self.clock.advance(0)
+            reactor.iterate()
             step(None)
 
     def testCancelAfter180(self):
         #Section 3.8
         self.inviteAnd180()
         self.sip1.datagramReceived(aliceCancel, ('10.0.0.1', 5060))
-        self.clock.advance(0)
+        reactor.iterate()
         self.sip2.datagramReceived(bobCancel200, ('10.0.0.2', 5060))
-        self.clock.advance(0)
+        reactor.iterate()
         self.assertEquals(len(self.proxy1SendQueue), 2)
         self.assertEquals(len(self.proxy2SendQueue), 2)
         self.assertMsgEqual(self.proxy1SendQueue[0], aliceCancel200)
@@ -1563,7 +1579,7 @@ class DoubleStatefulProxyTestCase(unittest.TestCase):
         self.resetq()
 
         self.sip2.datagramReceived(bob487, ('10.0.0.2', 5060))
-        self.clock.advance(0)
+        reactor.iterate()
         self.assertEquals(len(self.proxy2SendQueue), 2)
         self.assertEquals(len(self.proxy1SendQueue), 2)
         self.assertMsgEqual(self.proxy2SendQueue[0], bob487Ack)
@@ -1574,7 +1590,12 @@ class DoubleStatefulProxyTestCase(unittest.TestCase):
         self.sip1.datagramReceived(alice487Ack, ('10.0.0.1', 5060))
         self.assertEquals(len(self.proxy1SendQueue), 0)
         self.clock.advance(33)
-        #self.clock.advance(10)
+        reactor.iterate()
+        reactor.iterate()
+        self.clock.advance(10)  # twisted trunk requires this second .advance()
+        reactor.iterate()       # for some reason...?  different timing
+        reactor.iterate()       # algorithm?
+
         self.assertEquals(len(self.sip1.serverTransactions), 0)
         self.assertEquals(len(self.sip2.serverTransactions), 0)
         self.assertEquals(len(self.sip1.clientTransactions), 0)
@@ -1586,19 +1607,23 @@ class DoubleStatefulProxyTestCase(unittest.TestCase):
 
 
     def testNoResponse(self):
-        #this test is a piece of crap, really, there need to be a lot
-        #more asserts but at least the code path gets exercised =/
+        #this test is a piece of crap, really, there need to be a lot more asserts
+        #but at least the code path gets exercised =/
         self.invite()
-        self.clock.pump([0.1] * 330)
+        for x in range(330):
+            self.clock.advance(0.1)
+            reactor.iterate()
         #self.assertEquals(len(self.proxy2SendQueue), 7)
         self.failUnless(len(self.proxy2SendQueue) > 6) # close enough
         self.sip1.datagramReceived(alice408Ack, ('10.0.0.1',5060))
         self.clock.advance(32) #wait for timer D
+        reactor.iterate()
+        reactor.iterate()
         self.resetq()
 
 
 
-class RegistrationClientTestCase(unittest.TestCase):
+class RegistrationClientTestCase(FakeClockTestCase):
     def setUp(self):
         self.realm = TestRealm("proxy.com")
         self.realm.addUser('joe@proxy.com')
@@ -1615,8 +1640,7 @@ class RegistrationClientTestCase(unittest.TestCase):
         self.registrationClient = sip.RegistrationClient()
         self.clientTransport = sip.SIPTransport(self.registrationClient,
                                                 ["client.com","10.0.0.1"], 5060)
-        self.clock = task.Clock()
-        self.eventQueue = TaskQueue(self.clock)
+        self.eventQueue = TaskQueue()
         self.clientTransport.startProtocol()
         self.proxyTransport.startProtocol()
 
@@ -1635,19 +1659,17 @@ class RegistrationClientTestCase(unittest.TestCase):
         self.clientTransport.transport = fdt
         self.proxyTransport.transport = fdt
         self.registrationClient._lookupURI = self.proxy._lookupURI = lambda uri: defer.succeed([(testurls.get(uri.host, uri.host), 5060)])
-        sip.clock = self.clock
+
 
     def tearDown(self):
         def reallyCleanUp(x):
             self.proxyTransport.stopTransport(True)
             self.clientTransport.stopTransport(True)
-            sip.clock = reactor
         return self.eventQueue.uponCompletion().addCallback(reallyCleanUp)
     def testSuccessfulRegistration(self):
         d = self.registrationClient.register("joe", "passXword", "proxy.com")
         def checkRegistrarBindings(_):
             self.assertEquals(self.proxy.portal.realm.regs, 1)
         d.addCallback(checkRegistrarBindings)
-        self.clock.advance(0)
         return d
 

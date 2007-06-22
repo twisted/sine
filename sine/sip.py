@@ -21,7 +21,8 @@ from axiom import iaxiom
 from axiom.userbase  import Preauthenticated
 
 from epsilon.modal import mode, Modal
-
+from epsilon import hotfix
+hotfix.require("twisted", "internet_task_Clock")
 from urllib2 import parse_http_list
 from xshtoom import digestauth
 debuggingEnabled=0
@@ -29,6 +30,10 @@ debuggingEnabled=0
 def debug(txt):
     if debuggingEnabled:
         print (txt)
+
+#For unit testing. This will be set to an instance of
+#twisted.internet.task.Clock when running in tests.
+clock = reactor
 
 VIA_COOKIE = "z9hG4bK"
 PORT = 5060
@@ -1087,11 +1092,11 @@ class ClientInviteTransaction(AbstractClientTransaction):
             def timerARetry():
                 self.timerATries +=1
                 self.sendInvite()
-                self.timerA = reactor.callLater(self.timerATries*T1,
+                self.timerA = clock.callLater(self.timerATries*T1,
                                                 timerARetry)
             timerARetry()
 
-            self.timerB = reactor.callLater(64*T1, self.timeout)
+            self.timerB = clock.callLater(64*T1, self.timeout)
 
         def messageReceived(self, msg):
             self.response = msg
@@ -1155,8 +1160,8 @@ class ClientInviteTransaction(AbstractClientTransaction):
 
         def cancel(self):
             self.sendCancel()
-            #not exactly timer B but it oughta ba
-            self.timerB = reactor.callLater(64*T1, self.cancel)
+            #not exactly timer B but it oughta be
+            self.timerB = clock.callLater(64*T1, self.cancel)
 
 
         def timeout(self):
@@ -1170,7 +1175,7 @@ class ClientInviteTransaction(AbstractClientTransaction):
 
         def __enter__(self):
             debug("ClientInvite %s transitioning to 'completed'" % (self.peer,))
-            self.timerD = reactor.callLater(32, self.transitionTo,
+            self.timerD = clock.callLater(32, self.transitionTo,
                                             'terminated')
 
         def messageReceived(self, msg):
@@ -1210,10 +1215,10 @@ class ClientTransaction(AbstractClientTransaction):
             def timerERetry():
                 self.timerETries += 1
                 self.sendRequest()
-                self.timerE = reactor.callLater(min((2**self.timerETries)*T1, T2),
+                self.timerE = clock.callLater(min((2**self.timerETries)*T1, T2),
                                   timerERetry)
-            self.timerE = reactor.callLater(T1, timerERetry)
-            self.timerF = reactor.callLater(64*T1, self.transitionTo, 'terminated')
+            self.timerE = clock.callLater(T1, timerERetry)
+            self.timerF = clock.callLater(64*T1, self.transitionTo, 'terminated')
             self.sendRequest()
 
         def messageReceived(self, msg):
@@ -1238,9 +1243,9 @@ class ClientTransaction(AbstractClientTransaction):
             def timerERetry():
                 self.timerETries += 1
                 self.sendRequest()
-                self.timerE = reactor.callLater(T2, timerERetry)
-            self.timerE = reactor.callLater(T1, timerERetry)
-            self.timerF = reactor.callLater(64*T1, self.transitionTo, 'terminated')
+                self.timerE = clock.callLater(T2, timerERetry)
+            self.timerE = clock.callLater(T1, timerERetry)
+            self.timerF = clock.callLater(64*T1, self.transitionTo, 'terminated')
 
         def messageReceived(self, msg):
             if 200 <= msg.code:
@@ -1258,7 +1263,7 @@ class ClientTransaction(AbstractClientTransaction):
 
         def __enter__(self):
             debug("Client %s transitioning to 'completed'" % (self.peer,))
-            self.timerK = reactor.callLater(T4, self.transitionTo,
+            self.timerK = clock.callLater(T4, self.transitionTo,
                                             'terminated')
 
         def messageReceived(self, msg):
@@ -1324,10 +1329,10 @@ class ServerInviteTransaction(AbstractTransaction):
             def timerGRetry():
                 self.timerGTries +=1
                 self.repeatLastResponse()
-                self.timerG = reactor.callLater(min((2**self.timerGTries)*T1,
+                self.timerG = clock.callLater(min((2**self.timerGTries)*T1,
                                                     T2), timerGRetry)
-            self.timerG = reactor.callLater(T1, timerGRetry)
-            self.timerH = reactor.callLater(64*T1,
+            self.timerG = clock.callLater(T1, timerGRetry)
+            self.timerH = clock.callLater(64*T1,
                                             self.transitionTo, 'terminated')
 
 
@@ -1351,7 +1356,7 @@ class ServerInviteTransaction(AbstractTransaction):
 
         def __enter__(self):
             debug("ServerInvite %s transitioning to 'confirmed'" % (self.peer,))
-            self.timerI = reactor.callLater(T4, self.transitionTo,
+            self.timerI = clock.callLater(T4, self.transitionTo,
                                             'terminated')
 
         def messageReceived(self, msg):
@@ -1438,7 +1443,7 @@ class ServerTransaction(AbstractTransaction):
 
         def __enter__(self):
             debug("Server %s transitioning to 'completed'" % (self.peer,))
-            self.timerJ = reactor.callLater(64*T1,
+            self.timerJ = clock.callLater(64*T1,
                                             self.transitionTo, 'terminated')
 
         def messageReceived(self, msg):
@@ -1772,6 +1777,7 @@ class SIPResolverMixin:
             #just do an A lookup
             return [(userURI.host, 5060)]
 
+
 class Proxy(SIPResolverMixin):
     implements(ITransactionUser)
 
@@ -1952,7 +1958,7 @@ class Proxy(SIPResolverMixin):
             if msg.method == 'INVITE':
                 ct = ClientInviteTransaction(self.transport,
                                              self, msg, address)
-                timerC = reactor.callLater(181, ct.timeout)
+                timerC = clock.callLater(181, ct.timeout)
             else:
                 ct = ClientTransaction(self.transport, self, msg, address)
                 timerC = None

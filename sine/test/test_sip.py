@@ -9,7 +9,6 @@ from zope.interface import  implements
 from twisted.trial import unittest
 from sine import  sip
 from twisted.internet import defer, reactor, task
-from twisted.python import log
 
 from twisted.test import proto_helpers
 
@@ -18,8 +17,6 @@ from twisted.cred.error import UnauthorizedLogin
 
 from axiom.errors import NoSuchUser
 from axiom.userbase import Preauthenticated
-
-from axiom import userbase
 
 sip.SIPTransport._resolveA = lambda self, uri: defer.succeed(testurls.get(uri, uri))
 
@@ -415,8 +412,7 @@ class PermissiveChecker:
     implements(cred.checkers.ICredentialsChecker)
 
     credentialInterfaces = (cred.credentials.IUsernamePassword,
-                            cred.credentials.IUsernameHashedPassword,
-                            userbase.IPreauthCredentials)
+                            cred.credentials.IUsernameHashedPassword)
 
     def requestAvatarId(self, credentials):
         return credentials.username
@@ -576,7 +572,6 @@ class RegistrationTestCase(unittest.TestCase):
         self.realm.addUser('joe@proxy.com')
         self.portal = cred.portal.Portal(self.realm)
         c = cred.checkers.InMemoryUsernamePasswordDatabaseDontUse()
-        c.credentialInterfaces += (userbase.IPreauthCredentials,)
         c.addUser('joe@proxy.com', 'passXword')
         self.portal.registerChecker(c)
         self.proxy = sip.Proxy(self.portal)
@@ -1604,7 +1599,6 @@ class RegistrationClientTestCase(unittest.TestCase):
         self.realm.addUser('joe@proxy.com')
         self.portal = cred.portal.Portal(self.realm)
         c = cred.checkers.InMemoryUsernamePasswordDatabaseDontUse()
-        c.credentialInterfaces += (userbase.IPreauthCredentials,)
         c.addUser('joe@proxy.com', 'passXword')
         self.portal.registerChecker(c)
         self.proxy = sip.Proxy(self.portal)

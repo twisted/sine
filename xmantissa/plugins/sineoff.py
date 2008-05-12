@@ -1,10 +1,13 @@
+
+from twisted.python.filepath import FilePath
+
 from axiom import userbase
 
 from xmantissa import website, offering
 
+import sine
 from sine import sipserver, sinetheme
 from sine.voicemail import VoicemailDispatcher
-
 
 plugin = offering.Offering(
     name = u"Sine",
@@ -25,6 +28,5 @@ plugin = offering.Offering(
                            ("Voicemail", "Records voicemail for calls to user's SIP URL when no user agent is registered.",
                             VoicemailDispatcher)],
     loginInterfaces=(),
-    themes = (sinetheme.SineTheme('base'),)
-    )
-
+    themes = (sinetheme.SineTheme('base'),),
+    staticContentPath=FilePath(sine.__file__).sibling('static'))

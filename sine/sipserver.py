@@ -146,7 +146,7 @@ class Registration(Item):
 class ListenToRecordingAction(tdbview.Action):
     def __init__(self):
         tdbview.Action.__init__(self, 'listen',
-                            '/Sine/static/images/listen.png',
+                            '/static/Sine/images/listen.png',
                             'Listen to this recording')
     def toLinkStan(self, idx, item):
             return tags.a(href='/' + item.prefixURL)[
@@ -179,9 +179,6 @@ class PublicIndexPage(PublicPage):
     def __init__(self, original, staticContent, forUser=None):
         super(PublicIndexPage, self).__init__(
                 original, original.store.parent, tags.h1["Sine"], staticContent, forUser)
-
-    def child_static(self, ctx):
-        return static.File(sibpath(__file__, 'static'))
 
     def customizeFor(self, forUser):
         return self.__class__(self.original, self.staticContent, forUser)

@@ -21,8 +21,7 @@ plugin = offering.Offering(
         (None, website.WebSite),
         (None, sipserver.SIPServer)),
 
-    appPowerups = (sipserver.SinePublicPage,
-        ),
+    appPowerups = (),
     installablePowerups = [("SIP", "Gives user a SIP URL and the ability to send and receive calls through a SIP proxy",
                             sipserver.TrivialContact),
                            ("Voicemail", "Records voicemail for calls to user's SIP URL when no user agent is registered.",

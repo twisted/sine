@@ -159,40 +159,24 @@ class ListenToRecordingAction(tdbview.Action):
         return True
 
 class SinePublicPage(Item):
-    implements(ixmantissa.IPublicPage)
-
+    """
+    Needed for schema compatibility only.
+    """
     typeName = 'sine_public_page'
     schemaVersion = 1
 
     installedOn = reference()
-    powerupInterfaces = (ixmantissa.IPublicPage,)
 
-    def getResource(self):
-        return PublicIndexPage(self,
-                ixmantissa.IStaticShellContent(self.installedOn, None))
 
-class PublicIndexPage(PublicPage):
-    implements(ixmantissa.ICustomizable)
-
-    title = 'Sine'
-
-    def __init__(self, original, staticContent, forUser=None):
-        super(PublicIndexPage, self).__init__(
-                original, original.store.parent, tags.h1["Sine"], staticContent, forUser)
-
-    def customizeFor(self, forUser):
-        return self.__class__(self.original, self.staticContent, forUser)
 
 class SineBenefactor(Item):
-    implements(ixmantissa.IBenefactor)
-
+    """
+    Needed for schema compatibility only.
+    """
     typeName = 'sine_benefactor'
     schemaVersion = 1
     domain=text()
-    # Number of users this benefactor has endowed
     endowed = integer(default = 0)
-
-    powerupNames = ['sine.sipserver.TrivialContact']
 
 class PSTNContact:
     implements(sip.IContact)

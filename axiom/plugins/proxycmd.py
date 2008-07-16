@@ -1,7 +1,16 @@
+from zope.interface import directlyProvides
+
 from twisted.python import usage
+from twisted.plugin import IPlugin
+
 from axiom.scripts import axiomatic
 from axiom.dependency import installOn
+from axiom.iaxiom import IVersion
+
 from sine import sipserver
+#imported to register as a plugin
+from sine import version
+directlyProvides(version, IPlugin, IVersion)
 
 class Install(axiomatic.AxiomaticSubCommand):
     "Install a SIP proxy and registrar backed by an Axiom user database."

@@ -167,7 +167,7 @@ class ConfessionCall(object):
 
 
     def callEnded(self, dialog):
-        r = self.endRecording(dialog)
+        self.endRecording(dialog)
         if self.filename:
             self.saveRecording(self.avatar.store)
 

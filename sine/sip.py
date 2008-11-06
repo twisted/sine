@@ -284,7 +284,7 @@ def parseViaHeader(value):
                     value = int(value)
             result[name] = value
         return Via(**result)
-    except Exception, e:
+    except Exception:
         raise SIPError(400)
 
 class URL:
@@ -1915,7 +1915,7 @@ class Proxy(SIPResolverMixin):
                                        caller
                                        ).addCallback( lambda x: [i[0] for i in x])
         def failedLookup(err):
-            e = err.trap(UnauthorizedLogin)
+            err.trap(UnauthorizedLogin)
             if addr.host not in self.domains:
                 return [addr]
             else:
@@ -2109,7 +2109,6 @@ class Proxy(SIPResolverMixin):
 
         elif finalResponse.code in (401, 407):
             #RFC 3261 16.7.7
-            authHeaders = {}
             for code, ct in responses:
                if code == 401:
                    finalResponse.headers['www-authenticate'].extend(
@@ -2127,7 +2126,6 @@ class Proxy(SIPResolverMixin):
 
         if msg.code == 100:
             return
-        via = msg.headers['via'][0]
         msg.headers['via'] = msg.headers['via'][1:]
 
         if len(msg.headers['via']) == 0:

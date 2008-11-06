@@ -115,7 +115,7 @@ class MediaServerControlProtocol(batch.JuiceChild):
             key = ord(data[0])
             start = (ord(data[1]) & 128) and True or False
             if start:
-                d = DTMF(cookie=cookie, key=key).do(self)
+                DTMF(cookie=cookie, key=key).do(self)
             else:
                 #print "stop inbound dtmf", key
                 return

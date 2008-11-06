@@ -8,7 +8,7 @@ from twisted.python.components import registerAdapter
 from twisted.application.service import IService, Service
 from twisted.cred.portal import Portal
 
-from nevow import athena, tags, static
+from nevow import athena, tags
 
 from epsilon.extime import Time
 
@@ -24,7 +24,6 @@ from axiom.upgrade import registerUpgrader
 from xmantissa import ixmantissa, liveform
 from xmantissa import webnav, tdb, tdbview
 from xmantissa.webtheme import getLoader
-from xmantissa.publicresource import PublicPage
 
 import sine
 from sine import sip, useragent, tpcc

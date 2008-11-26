@@ -1,5 +1,9 @@
 # -*- test-case-name: sine.test -*-
-# Copyright 2005 Divmod, Inc.  See LICENSE file for details
+# Copyright 2005-2008 Divmod, Inc.  See LICENSE file for details
+
+"""
+A SIP stack conforming to RFC 3261.
+"""
 
 # "I have always wished that my computer would be as easy to use as my
 # telephone. My wish has come true. I no longer know how to use my
@@ -220,11 +224,37 @@ def respondToAuthChallenge(response, authdict, header):
                              if v])
     return response
 
-class Via:
-    """A SIP Via header."""
+_absent = object()
 
-    def __init__(self, host, port=PORT, transport="UDP", ttl=None, hidden=False,
-                 received=None, rport=None, branch=None, maddr=None):
+class Via:
+    """
+    A SIP Via header, representing a segment of the path taken by the request.
+
+    See RFC 3261, sections 8.1.1.7, 18.2.2, and 20.42.
+
+    @ivar transport: Network protocol used for this leg. (Probably either "TCP"
+    or "UDP".) Required.
+    @ivar branch: Unique identifier for this request. Required.
+    @ivar host: Hostname or IP for this leg. Required.
+    @ivar port: Port used for this leg.  Optional.
+
+    @ivar rport: Clients can set this to None to request RFC 3581
+    processing. Servers wishing to honor the request should set this parameter
+    to the source port the request was received from. Optional.
+
+    @ivar ttl: Time-to-live for requests on multicast paths.
+    @ivar maddr: The destination multicast address, if any.
+    @ivar hidden: Obsolete in SIP 2.0.
+
+    @ivar otherParams: A dict of any other parameters in the header.
+    """
+
+    def __init__(self, host, port=PORT, transport="UDP", ttl=None,
+                 hidden=False, received=None, rport=_absent, branch=None,
+                 maddr=None, **kw):
+        """
+        Set parameters of this Via header.
+        """
         self.transport = transport
         self.host = host
         self.port = port
@@ -234,22 +264,38 @@ class Via:
         self.rport = rport
         self.branch = branch
         self.maddr = maddr
+        self.otherParams = kw
 
     def toString(self):
+        """
+        Serialize this header for use in a request or response.
+        """
         s = "SIP/2.0/%s %s:%s" % (self.transport, self.host, self.port)
         if self.hidden:
             s += ";hidden"
-        for n in "ttl", "branch", "maddr", "received", "rport":
+        for n in "ttl", "branch", "maddr", "received":
             value = getattr(self, n)
-            if value == True:
-                s += ";" + n
-            elif value != None:
+            if value is not None:
                 s += ";%s=%s" % (n, value)
+        if self.rport is None:
+            s += ";rport"
+        elif self.rport is not _absent:
+            s += ";rport=%s" % (self.rport,)
+
+        etc = self.otherParams.items()
+        etc.sort()
+        for k, v in etc:
+            if v is None:
+                s += ";" + k
+            else:
+                s += ";%s=%s" % (k, v)
         return s
 
 
 def parseViaHeader(value):
-    """Parse a Via header, returning Via class instance."""
+    """
+    Parse a Via header, returning Via class instance.
+    """
     try:
         parts = value.split(";")
         sent, params = parts[0], parts[1:]
@@ -277,22 +323,49 @@ def parseViaHeader(value):
                 continue
             parts = p.split("=", 1)
             if len(parts) == 1:
-                name, value = parts[0], True
+                name, value = parts[0], None
             else:
                 name, value = parts
                 if name in ("rport", "ttl"):
                     value = int(value)
             result[name] = value
         return Via(**result)
-    except Exception:
+    except Exception, e:
+        log.err(e)
         raise SIPError(400)
 
-class URL:
-    """A SIP URL."""
+
+class URI:
+    """A SIP URI, as defined in RFC 3261, section 19.1.
+
+    @ivar host: A hostname or IP address. Required.
+    @ivar username: The identifier of a particular resource at the host being
+    addressed. Optional.
+    @ivar password: A password associated with the username. Optional.
+    @ivar port: The port number where the request is to be sent. Optional.
+    @ivar transport: The transport mechanism to be used for sending SIP
+    messages. Optional.
+    @ivar usertype: The 'user' URI parameter. May be 'phone' or 'dialstring' -
+    see RFC 3261, 19.1.6., and RFC 4967. Optional.
+    @ivar method: The SIP method to use when forming a request from this
+    URI. (INVITE, REGISTER, etc.) Optional.
+    @ivar ttl: Time-to-live for multicast requests. Used with C{maddr}.
+    @ivar maddr: Server address to be contacted for this user. For use with
+    multicast requests. Optional.
+    @ivar tag: Half of a SIP dialog identifier. See RFC 3261, section
+    19.3. Optional.
+    @ivar other: A dict of any other URI parameters not specifically mentioned
+    here. Optional.
+    @ivar headers: A dict of key-value pairs to be used as headers when forming
+    a request from this URI. Optional.
+    """
 
     def __init__(self, host, username=None, password=None, port=None,
                  transport=None, usertype=None, method=None,
                  ttl=None, maddr=None, tag=None, other=None, headers=None):
+        """
+        Set parameters of this URI.
+        """
         self.username = username
         self.host = host
         self.password = password
@@ -313,9 +386,16 @@ class URL:
             self.headers = headers
 
     def toCredString(self):
+        """
+        Return a string suitable for use with
+        L{twisted.cred.portal.Portal.login}.
+        """
         return '%s@%s' % (self.username, self.host)
 
     def toString(self):
+        """
+        Format this object's contents as a SIP URI.
+        """
         l = []; w = l.append
         w("sip:")
         if self.username != None:
@@ -339,27 +419,52 @@ class URL:
                 w(";%s" % k)
         if self.headers:
             w("?")
-            w("&".join([("%s=%s" % (headerCapitalize(h), urllib.quote(v))) for (h, v) in self.headers.items()]))
+            w("&".join([("%s=%s" % (headerCapitalize(h), urllib.quote(v)))
+                        for (h, v) in self.headers.items()]))
         return "".join(l)
 
     def __str__(self):
+        """
+        Format this object's contents as a SIP URI.
+        """
         return self.toString()
 
     def __repr__(self):
-        return '<sip.URL %s>' % self.toString()
+        """
+        Provide a debugging representation of this object.
+        """
+        return '<sip.URI %s>' % self.toString()
 
     def __cmp__(self, other):
+        """
+        Incorrect implementation of comparison.  See RFC 3261, section
+        19.1.4. for a description of the correct algorithm, which ignores some
+        differences this method considers significant.
+        """
         return cmp(self.__dict__, other.__dict__)
 
     def __hash__(self):
         #I could include the other stuff but what's the point?
         #this is the most usual stuff and python is very kind to collisions
-        return hash((self.host, self.username, self.port, tuple(self.headers.items())))
+        return hash((self.host, self.username, self.port,
+                     tuple(self.headers.items())))
+
+
+
+#"URL" is the deprecated spelling of this class.
+URL = URI
+
 
 def parseURL(url, host=None, port=None):
-    """Return string into URL object.
-
+    """
+    Parse string into URI object.
     URIs are of of form 'sip:user@example.com'.
+
+    @param url: A string representation of a SIP URI.
+    @param host: The host to use for the URI object returned, overriding the
+    value specified in the input.
+    @param port: The port to use for the URI object returned, overriding the
+    value specified in the input.
     """
     d = {}
     if not url.startswith("sip:"):
@@ -410,17 +515,16 @@ def parseURL(url, host=None, port=None):
     return URL(**d)
 
 
-def cleanRequestURL(url):
-    """Clean a URL from a Request line."""
-    url.transport = None
-    url.maddr = None
-    url.ttl = None
-    url.headers = {}
-
-
-
 def parseAddress(address, host=None, port=None, clean=0):
     """Return (name, uri, params) for From/To/Contact header.
+
+    @param address: A string representation of a SIP address (A 'name-addr', as
+    defined in RFC 3261, section 25.1, plus parameters.)
+
+    @param host: The host to use for the URI object returned, overriding the
+    value specified in the input.
+    @param port: The port to use for the URI object returned, overriding the
+    value specified in the input.
 
     @param clean: remove unnecessary info, usually for From and To headers.
 
@@ -476,10 +580,12 @@ def parseAddress(address, host=None, port=None, clean=0):
         log.err()
         raise SIPError(400)
 
+
 def formatAddress(address):
-    """ Format a ('display name', URL, {params}) correctly.
     """
-    if isinstance(address, URL):
+    Format a SIP address of the form ('display name', URI, {params}) correctly.
+    """
+    if isinstance(address, URI):
         #sigh. so sloppy! but better than formatting without the <>s
         display = ""
         uri = address
@@ -497,46 +603,82 @@ def formatAddress(address):
         out = out + params
     return out
 
+
 class Message:
-    """A SIP message."""
+    """
+    Mixin containing shared behaviour for requests and responses.
+
+    @ivar length: The length of the message body.
+    @ivar headers: An ordered mapping of header names to values.
+    @ivar finished: A boolean value indicating whether the entire body has been
+    added to this message.
+    """
 
     length = None
 
-    def __init__(self, version):
+    def __init__(self):
+        """
+        Set initial values.
+        """
         self.headers = util.OrderedDict() # map name to list of values
         self.body = ""
         self.finished = 0
-        self.version = version
+
 
     def copy(self):
-        c = Message(self.version)
+        """
+        Create a new object with the same attributes as this one.
+        """
+        c = Message()
+        c.__class__ = self.__class__
         c.headers = self.headers.copy()
         c.body = self.body
         c.finished = self.finished
         return c
 
+
     def __eq__(self, other):
+        """
+        Compare another message's contents to this one's.
+        """
         return (other.__class__ == self.__class__
-                and self.version == other.version
-                and dict([(k,v) for k,v in self.headers.items() if v]) == dict([(k,v) for k,v in other.headers.items() if v])
+                and dict([(k,v) for k,v in self.headers.items() if v]) ==
+                dict([(k,v) for k,v in other.headers.items() if v])
                 and self.body == other.body)
 
+
     def addHeader(self, name, value):
+        """
+        Add a new header to this message.
+        """
         name = name.lower()
         name = longHeaders.get(name, name)
         if name == "content-length":
             self.length = int(value)
         self.headers.setdefault(name,[]).append(value)
 
+
     def bodyDataReceived(self, data):
+        """
+        Append more data to this message's body.
+        """
         self.body += data
 
+
     def creationFinished(self):
+        """
+        Called to indicate that a complete message has been received.
+        """
         if (self.length != None) and (self.length != len(self.body)):
             raise ValueError, "wrong body length"
         self.finished = 1
 
+
     def toString(self):
+        """
+        Render this message's headers and body as they should appear on the
+        wire.
+        """
         s = "%s\r\n" % self._getHeaderLine()
         for n, vs in self.headers.items():
             for v in vs:
@@ -545,113 +687,176 @@ class Message:
         s += self.body
         return s
 
+
     def _getHeaderLine(self):
+        """
+        Override to provide the first line of this object's string
+        representation.
+        """
         raise NotImplementedError
 
+
+
 class Request(Message):
-    """A Request for a URI"""
+    """
+    A request for a SIP URI.
 
+    @ivar method: This message's SIP method.
+    @ivar uri: The recipient of this request.
+    """
 
-    def __init__(self, method, uri, version="SIP/2.0"):
-        Message.__init__(self, version)
+    def __init__(self, method, uri):
+        """
+        Set up the request.
+
+        @param method: The SIP method to use.
+        @param uri: The recipient of this request.
+        """
+        Message.__init__(self)
         self.method = method
         if isinstance(uri, URL):
             self.uri = uri
         else:
             self.uri = parseURL(uri)
-            cleanRequestURL(self.uri)
+            self.uri.transport = None
+            self.uri.maddr = None
+            self.uri.ttl = None
+            self.uri.headers = {}
+
 
     def copy(self):
+        """
+        Create a new request with the same attributes as this one.
+        """
         c = Message.copy(self)
-        c.__class__ = Request
         c.method = self.method
         c.uri = self.uri
         return c
 
+
     def __eq__(self, other):
-        return Message.__eq__(self, other) and self.method == other.method and self.uri == other.uri
+        """
+        Compare another request's contents to this one.
+        """
+        return (Message.__eq__(self, other) and self.method == other.method
+                and self.uri == other.uri)
+
 
     def __repr__(self):
-        return "<SIP Request %d:%s %s>" % (id(self), self.method, self.uri.toString())
+        """
+        Provide a representation of this object for debugging.
+        """
+        return "<SIP Request %d:%s %s>" % (id(self), self.method,
+                                           self.uri.toString())
+
 
     def _getHeaderLine(self):
-        return "%s %s %s" % (self.method, self.uri.toString(), self.version)
+        """
+        Returns the first line of the request.
+        """
+        return "%s %s SIP/2.0" % (self.method, self.uri.toString())
+
 
 
 class Response(Message):
-    """A Response to a URI Request"""
+    """
+    A SIP response message.
 
-    def __init__(self, code, phrase=None, version="SIP/2.0"):
-        Message.__init__(self, version)
+    @param code: The response code.
+    @param phrase: A description of the response status.
+    """
+
+    def __init__(self, code, phrase=None):
+        """
+        Set up the response.
+        """
+        Message.__init__(self)
         self.code = code
         if phrase == None:
             phrase = statusCodes[code]
         self.phrase = phrase
 
     def __eq__(self, other):
+        """
+        Compare another response's contents to this one.
+        """
         return Message.__eq__(self, other) and self.code == other.code
 
     def __repr__(self):
+        """
+        Provide a representation of this object for debugging.
+        """
         return "<SIP Response %d:%s>" % (id(self), self.code)
 
     def _getHeaderLine(self):
+        """
+        Returns the first line of the response.
+        """
         return "SIP/2.0 %s %s" % (self.code, self.phrase)
-
-def splitMultiHeader(s):
-    "Split a header on commas, ignoring commas in quotes and escaped quotes."
-    headers = []
-    last = 0
-    quoted = False
-    for i in xrange(len(s)):
-        if s[i] == '"':
-            quoted = ~quoted
-            if i == 0: continue
-            j = i-1
-            while s[j] == '\\':
-                quoted = ~quoted
-                j = j-1
-        if not quoted and s[i] == ',':
-            headers.append(s[last:i])
-            last = i+1
-    headers.append(s[last:])
-    return headers
 
 
 
 class MessagesParser(basic.LineReceiver):
-    """A SIP messages parser.
+    """
+    A SIP messages parser.
 
-    Expects dataReceived, dataDone repeatedly,
-    in that order. Shouldn't be connected to actual transport.
+    Expects dataReceived, dataDone repeatedly, in that order. Shouldn't be
+    connected to actual transport.
+
+    @ivar messageReceived: A one-argument callable, to be invoked when a
+    complete message has been parsed.
+
+    @ivar state: An indicator of what the parser expects next. One of
+    "firstline", "headers", "body", or "invalid".
     """
 
-    version = "SIP/2.0"
     acceptResponses = 1
     acceptRequests = 1
     state = "firstline" # or "headers", "body" or "invalid"
-    multiheaders = ['accept','accept-encoding', 'accept-language', 'alert-info', 'allow', 'authentication-info', 'call-info',  'content-encoding', 'content-language', 'error-info', 'in-reply-to', 'proxy-require',  'require',  'supported', 'unsupported', 'via', 'warning']
+    multiheaders = ['accept','accept-encoding', 'accept-language',
+                    'alert-info', 'allow', 'authentication-info',
+                    'call-info',  'content-encoding', 'content-language',
+                    'error-info', 'in-reply-to', 'proxy-require',  'require',
+                    'supported', 'unsupported', 'via', 'warning']
     multiAddressHeaders = ['route', 'record-route', 'contact']
-    debug = 0
+
 
     def __init__(self, messageReceivedCallback):
+        """
+        @param messageReceivedCallback: A one-argument callable, to be invoked
+        when a complete message has been parsed.
+        """
         self.messageReceived = messageReceivedCallback
         self.reset()
 
+
     def reset(self, remainingData=""):
+        """
+        Prepare the parser to accept a new message.
+        """
         self.state = "firstline"
         self.length = None # body length
         self.bodyReceived = 0 # how much of the body we received
         self.message = None
         self.setLineMode(remainingData)
 
+
     def invalidMessage(self, exc=None):
+        """
+        Raise an exception, indicating failure to parse a valid SIP message.
+        """
         self.dataDone()
         if isinstance(exc, SIPError):
             raise exc
         else:
             raise SIPError(400)
 
+
     def dataDone(self):
+        """
+        Signal the end of the message if a complete message has been received,
+        and reset internal state to prepare for a new message.
+        """
         # clear out any buffered data that may be hanging around
         self.clearLineBuffer()
         if self.state == "firstline":
@@ -662,28 +867,43 @@ class MessagesParser(basic.LineReceiver):
         if self.length == None:
             # no content-length header, so end of data signals message done
             self.messageDone()
-        elif self.length < self.bodyReceived:
+        elif self.length > self.bodyReceived:
             # aborted in the middle
             self.reset()
         else:
-            # we have enough data and message wasn't finished? something is wrong
+            # we have enough data and message wasn't finished? something is
+            # wrong.
             raise RuntimeError, "corrupted or overflowed SIP packet"
 
+
     def dataReceived(self, data):
+        """
+        Parse input lines, raising L{SIPError} on failure.
+        """
         try:
             basic.LineReceiver.dataReceived(self, data)
         except Exception, e:
             log.err()
             self.invalidMessage(e)
 
-    def handleFirstLine(self, line):
-        """Expected to create self.message."""
-        raise NotImplementedError
+#    def handleFirstLine(self, line):
+#        """
+#        Expected to create self.message.
+#        """
+#        raise NotImplementedError
+
 
     def lineLengthExceeded(self, line):
+        """
+        Raise L{SIPError} if lines of ridiculous length are received.
+        """
         self.invalidMessage()
 
+
     def lineReceived(self, line):
+        """
+        Handle a single SIP message line.
+        """
         if self.state == "firstline":
             while line.startswith("\n") or line.startswith("\r"):
                 line = line[1:]
@@ -742,7 +962,32 @@ class MessagesParser(basic.LineReceiver):
                 return
             self.setRawMode()
 
+
+    def _splitMultiHeader(self, s):
+        """
+        Split a header on commas, ignoring commas in quotes and escaped quotes.
+        """
+        headers = []
+        last = 0
+        quoted = False
+        for i in xrange(len(s)):
+            if s[i] == '"':
+                quoted = ~quoted
+                if i == 0: continue
+                j = i-1
+                while s[j] == '\\':
+                    quoted = ~quoted
+                    j = j-1
+            if not quoted and s[i] == ',':
+                headers.append(s[last:i])
+                last = i+1
+        headers.append(s[last:])
+        return headers
+
     def processHeaderLine(self, line):
+        """
+        Parse a single SIP header.
+        """
         name, value = line.split(":", 1)
         name, value = name.rstrip().lower(), value.lstrip()
 
@@ -754,20 +999,28 @@ class MessagesParser(basic.LineReceiver):
             else:
                 self.message.addHeader(v)
         elif name in self.multiAddressHeaders:
-            for val in splitMultiHeader(value):
+            for val in self._splitMultiHeader(value):
                 self.message.addHeader(name, val)
         else:
             self.message.addHeader(name, value)
         if name.lower() == "content-length":
             self.length = int(value.lstrip())
 
+
     def messageDone(self, remainingData=""):
+        """
+        Invoke the C{messageReceived} callback with the completed message
+        object and prepare to receive a new message.
+        """
         assert self.state == "body"
         self.message.creationFinished()
         self.messageReceived(self.message)
         self.reset(remainingData)
 
     def rawDataReceived(self, data):
+        """
+        Handle message body data.
+        """
         if self.length == None:
             self.message.bodyDataReceived(data)
         else:
@@ -786,6 +1039,9 @@ class MessagesParser(basic.LineReceiver):
 
 
 class SIPError(Exception):
+    """
+    Raised to indicate that a specific SIP error code should be reported.
+    """
     def __init__(self, code, phrase=None):
         if phrase is None:
             phrase = statusCodes[code]
@@ -793,22 +1049,38 @@ class SIPError(Exception):
         self.code = code
         self.phrase = phrase
 
+
+
 class SIPLookupError(SIPError):
-    """An error raised specifically for SIP lookup errors.
+    """
+    An error raised specifically for SIP lookup errors.
     """
     def __init__(self, code=404, phrase=None):
         SIPError.__init__(self, code=code, phrase=phrase)
 
+
+
 class RegistrationError(SIPError):
-    """Registration was not possible."""
+    """
+    Registration was not possible.
+    """
+
+
 
 class ISIPEvent(Interface):
-    "A log message concerning SIP"
+    """
+    A log message concerning SIP.
+    """
+
 
 
 class IAuthorizer(Interface):
+    """
+    Interface for challenge-response authentication.
+    """
     def getChallenge(peer):
-        """Generate a challenge the client may respond to.
+        """
+        Generate an authentication challenge the client may respond to.
 
         @type peer: C{tuple}
         @param peer: The client's address
@@ -817,8 +1089,10 @@ class IAuthorizer(Interface):
         @return: The challenge string
         """
 
+
     def decode(response):
-        """Create a credentials object from the given response.
+        """
+        Create a credentials object from the given response.
 
         @type response: C{str}
         """
@@ -826,7 +1100,8 @@ class IAuthorizer(Interface):
 
 
 class BasicAuthorizer:
-    """Authorizer for insecure Basic (base64-encoded plaintext) authentication.
+    """
+    Authorizer for insecure Basic (base64-encoded plaintext) authentication.
 
     This form of authentication is broken and insecure.  Do not use it.
     """
@@ -834,9 +1109,17 @@ class BasicAuthorizer:
     implements(IAuthorizer)
 
     def getChallenge(self, peer):
+        """
+        @see L{IAuthorizer.getChallenge}
+        """
         return None
 
+
     def decode(self, response):
+        """
+        @see L{IAuthorizer.decode}
+        """
+
         # At least one SIP client improperly pads its Base64 encoded messages
         for i in range(3):
             try:
@@ -853,15 +1136,27 @@ class BasicAuthorizer:
             return credentials.UsernamePassword(*p)
         raise SIPError(400)
 
+
+
 class DigestedCredentials(credentials.UsernameHashedPassword):
-    """Yet Another Simple Digest-MD5 authentication scheme"""
+    """
+    Yet Another Simple Digest-MD5 authentication scheme
+    """
 
     def __init__(self, username, fields, challenges):
+        """
+        Set up attributes.
+        """
         self.username = username
         self.fields = fields
         self.challenges = challenges
 
+
     def checkPassword(self, password):
+        """
+        Do the digest calculations to determine if the given password is
+        correct.
+        """
         method = 'REGISTER'
         response = self.fields.get('response')
         uri = self.fields.get('uri')
@@ -887,7 +1182,12 @@ class DigestedCredentials(credentials.UsernameHashedPassword):
 
         return expected == response
 
+
 class DigestAuthorizer:
+    """
+    Some more digest auth stuff that needs to be factored out. See Twisted
+    ticket #2015.
+    """
     CHALLENGE_LIFETIME = 15
 
     implements(IAuthorizer)
@@ -921,7 +1221,8 @@ class DigestAuthorizer:
             return s
         response = ' '.join(response.splitlines())
         parts = response.split(',')
-        auth = dict([(k.strip(), unq(v.strip())) for (k, v) in [p.split('=', 1) for p in parts]])
+        auth = dict([(k.strip(), unq(v.strip()))
+                     for (k, v) in [p.split('=', 1) for p in parts]])
         try:
             username = auth['username']
         except KeyError:
@@ -931,93 +1232,156 @@ class DigestAuthorizer:
         except:
             raise SIPError(400)
 
-def responseFromRequest(code, request):
-       response = Response(code)
-       for name in ("via", "to", "from", "call-id", "cseq"):
-           response.headers[name] = request.headers.get(name, [])[:]
 
-       return response
+
+def responseFromRequest(code, request):
+    """
+    Create a response to a request, copying the essential headers from the
+    given request.
+
+    @param code: The SIP response code to use.
+    @param request: The request to respond to.
+    """
+    response = Response(code)
+    for name in ("via", "to", "from", "call-id", "cseq"):
+        response.headers[name] = request.headers.get(name, [])[:]
+    return response
+
 
 def computeBranch(msg):
-        """Create a branch tag to uniquely identify this message.  See
-        RFC3261 sections 8.1.1.7 and 16.6.8."""
-        if msg.headers.has_key('via') and msg.headers['via']:
-            oldvia = msg.headers['via'][0]
-        else:
-            oldvia = ''
-        return VIA_COOKIE + md5.new((parseAddress(msg.headers['to'][0])[2].get('tag','') +
-                                    parseAddress(msg.headers['from'][0])[2].get('tag','')+
-                                   msg.headers['call-id'][0] +
-                                   msg.uri.toString() +
-                                   oldvia +
-                                   msg.headers['cseq'][0].split(' ')[0])
-                                  ).hexdigest()
+    """
+    Create a branch tag to uniquely identify this message.  See RFC3261
+    sections 8.1.1.7 and 16.6.8.
+    """
+    if msg.headers.has_key('via') and msg.headers['via']:
+        oldvia = msg.headers['via'][0]
+    else:
+        oldvia = ''
+    branchIdentifiers = [parseAddress(msg.headers['to'][0])[2].get('tag',''),
+                         parseAddress(msg.headers['from'][0])[2].get('tag',''),
+                         msg.headers['call-id'][0], msg.uri.toString(), oldvia,
+                         msg.headers['cseq'][0].split(' ')[0]]
+    return VIA_COOKIE + md5.new(''.join(branchIdentifiers)).hexdigest()
+
 
 class IContact(Interface):
-    """A user of a registrar or proxy"""
+    """
+    A user of a registrar or proxy.
+    """
 
     def registerAddress(physicalURL, expiry):
-        """Register the physical address of a logical URL.
+        """
+        Register the physical address of a logical URL.
 
         @return: Deferred of C{Registration} or failure with RegistrationError.
         """
+
 
     def unregisterAddress(physicalURL):
-        """Unregister the physical address of a logical URL.
+        """
+        Unregister the physical address of a logical URL.
 
         @return: Deferred of C{Registration} or failure with RegistrationError.
         """
 
-    def getRegistrationInfo():
-        """Get registration info for logical URL.
 
-        @return: Deferred of C{Registration} object or failure of SIPLookupError.
+    def getRegistrationInfo():
         """
+        Get registration info for logical URL.
+
+        @return: Deferred of C{Registration} object or failure of
+        SIPLookupError.
+        """
+
 
     def callIncoming(name, callerURI, callerContact):
-        """Record an incoming call with a user's name, the incoming
-        SIP URI, and, if they are registered with our system, their
-        caller IContact implementor.
-
-        You may *decline* an incoming call by raising an exception in
-        this method.  A SIPError is preferred.
         """
+        Called upon an incoming call with a user's name, the incoming SIP URI,
+        and, if one exists, their caller IContact implementor.
+
+        You may *decline* an incoming call by raising an exception in this
+        method.  A SIPError is preferred.
+        """
+
 
     def callOutgoing(name, calleeURI):
-        """Record an outgoing call.
         """
+        Called upon an outgoing call.
+        """
+
+
 
 #Timer values defined in Section 30 of RFC 3261.
 T1 = 0.5
 T2 = 4
 T4 = 5
 
+
 class AbstractTransaction(Modal):
-    def stopTransaction(self, hard):
+    """
+    Superclass of all SIP transaction handlers.
+
+    See RFC 3261, section 17.
+    """
+    def stopTransaction(self):
+        """
+        Called by the SIP transport when a transaction ends.
+        """
         self.transitionTo('terminated')
 
+
+
 class AbstractClientTransaction(AbstractTransaction):
+    """
+    Superclass of client transaction handlers.
+
+    See RFC 3261, section 17.1.
+
+    @ivar terminationHook: A tuple of (callable, args, kwargs) to invoke when
+    this transaction is terminated.
+    """
     terminationHook = None
-    def stopTransaction(self, hard):
+    def stopTransaction(self):
+        """
+        Called by the SIP transport when the transaction ends.
+        """
         if self.response is None:
             # the transaction is stopping for server maintenance, we need to
             # select a response if we haven't gotten one
             self.response = responseFromRequest(503, self.request)
-        return super(AbstractClientTransaction, self).stopTransaction(hard)
+        return super(AbstractClientTransaction, self).stopTransaction()
+
 
     def uponTerminationDo(self, f, *args, **kwargs):
+        """
+        Set a function to invoke when the transaction terminates.
+        """
         self.terminationHook = (f, args, kwargs)
 
+
     def transportError(self, err):
+        """
+        Send the error to the transport layer and terminate this transaction.
+        """
         self.tu.transportError(self, err)
         self.transitionTo('terminated')
 
+
     class terminated(mode):
+        """
+        Behaviour for terminated client transactions.
+        """
         def __enter__(self):
+            """
+            When this client transaction is terminated, call the termination
+            hook, unregister with the transport, and inform the transaction
+            user.
+            """
             if self.terminationHook:
                 #rockin' it 1.5.2 style
                 apply(apply, self.terminationHook)
-            debug("%s %s transitioning to 'terminated'" % (self.__class__.__name__, self.peer))
+            debug("%s %s transitioning to 'terminated'" % (
+                    self.__class__.__name__, self.peer))
             #XXX brutal
             for k, v in self.transport.clientTransactions.iteritems():
                 if v == self:
@@ -1025,23 +1389,53 @@ class AbstractClientTransaction(AbstractTransaction):
                     break
             self.tu.clientTransactionTerminated(self)
 
+
         def messageReceived(self, msg):
+            """
+            Messages to terminated client transactions are ignored.
+            """
             pass
 
+
         def __exit__(self):
+            """
+            Terminated transactions can't transition to a different state.
+            """
             raise RuntimeError, "can't unterminate a transaction"
 
+
         def cancel(self):
+            """
+            Cancellation messages to terminated client transactions are
+            ignored.
+            """
             pass
 
 
 
 class ClientInviteTransaction(AbstractClientTransaction):
+    """
+    Implementation of INVITE client transactions.  See RFC 3261, section
+    17.1.1.
+
+    @ivar transport: The SIP transport protocol.
+    @ivar tu: An implementor if L{ITransactionUser}.
+    @ivar request: An INVITE L{Request}.
+    @ivar peer: The L{URI} the request is addressed to.
+    @ivar response: The L{Response} received to the request (or None if one has
+    not been received yet).
+    @ivar branch: The branch identifier for this transaction.
+    @ivar waitingToCancel: Whether this transaction is waiting for the
+    opportunity to send a cancellation message or not.
+    """
     initialMode = 'calling'
 
     terminated = AbstractClientTransaction.terminated
 
     def __init__(self, transport, tu, invite, peerURL):
+        """
+        Set up initial values and register with the transport.
+        """
         self.transport = transport
         self.tu = tu
         self.request = invite
@@ -1052,40 +1446,58 @@ class ClientInviteTransaction(AbstractClientTransaction):
         self.transport.clientTransactions[self.branch] = self
         self.__enter__()
 
+
     def sendInvite(self):
+        """
+        Send this transaction's INVITE request to its target.
+        """
         self.transport.sendRequest(self.request, self.peer)
 
 
     def ack(self, msg):
-        "Builds an ACK according to the rules in 17.1.1.3, RFC3261."
+        """
+        Send an ACK message to the response received.  See RFC3261, section
+        17.1.1.3.
+        """
         ack = Request('ACK',self.request.uri)
         for name in ("from", "call-id", 'route'):
             ack.headers[name] = self.request.headers.get(name, [])[:]
-        ack.addHeader('cseq', "%s ACK" % self.request.headers['cseq'][0].split(' ',1)[0])
+        cseq = self.request.headers['cseq'][0].split(' ',1)[0]
+        ack.addHeader('cseq', cseq + " ACK")
         ack.headers['to'] = msg.headers['to']
         ack.headers['max-forwards'] = ['70']
         ack.addHeader('via', Via(self.transport.host,
                                   self.transport.port,
-                                  rport=True,
+                                  rport=None,
                                   branch=self.branch).toString())
         self.transport.sendRequest(ack, self.peer)
 
+
     def sendCancel(self):
+        """
+        Send a message cancelling this transaction.
+        """
         cancel = Request("CANCEL", self.request.uri)
         for hdr in ('from','to','call-id'):
             cancel.addHeader(hdr, self.request.headers[hdr][0])
         cancel.addHeader('max-forwards','70')
-        cancel.addHeader('cseq', "%s CANCEL" % self.request.headers['cseq'][0].split(' ',1)[0])
+        cseq = self.request.headers['cseq'][0].split(' ',1)[0]
+        cancel.addHeader('cseq', cseq + " CANCEL")
         cancel.addHeader('via', Via(self.transport.host,
                                     self.transport.port,
-                                    rport=True,
+                                    rport=None,
                                     branch=self.branch).toString())
         self.transport.sendRequest(cancel, self.peer)
 
 
     class calling(mode):
-
+        """
+        Behaviour for INVITE client transactions in the 'calling' state.
+        """
         def __enter__(self):
+            """
+            Start timer A and timer B.
+            """
             debug("ClientInvite %s transitioning to 'calling'" % (self.peer,))
             self.timerATries = 0
 
@@ -1098,7 +1510,11 @@ class ClientInviteTransaction(AbstractClientTransaction):
 
             self.timerB = clock.callLater(64*T1, self.timeout)
 
+
         def messageReceived(self, msg):
+            """
+            Handle state changes according to the message type received.
+            """
             self.response = msg
 
             if 100 <= msg.code < 200:
@@ -1111,32 +1527,50 @@ class ClientInviteTransaction(AbstractClientTransaction):
                 self.tu.responseReceived(msg,self)
                 self.transitionTo('terminated')
             elif 300 <= msg.code < 700:
-                #XXX important! if ack is not sent first,
-                #non-monotonic sequence numbers could occur
+                # important! if ack is not sent first, non-monotonic sequence
+                # numbers could occur
                 self.ack(msg)
                 self.transitionTo('completed')
                 self.tu.responseReceived(msg,self)
 
 
         def __exit__(self):
+            """
+            Stop timers A and B.
+            """
             if self.timerA.active():
                 self.timerA.cancel()
             if self.timerB.active():
                 self.timerB.cancel()
 
+
         def timeout(self):
+            """
+            If timer B fires, terminate the transaction and send the
+            appropriate timeout/cancel error code.
+            """
             if self.waitingToCancel:
                 self.response = responseFromRequest(487, self.request)
             else:
                 self.response = responseFromRequest(408, self.request)
             self.transitionTo('terminated')
 
+
         def cancel(self):
+            """
+            Make this transaction send a cancellation message when it gets the
+            opportunity.
+            """
             self.waitingToCancel = True
 
+
     class proceeding(mode):
+        """
+        Behaviour for INVITE client transactions in the 'proceeding' state.
+        """
         def __enter__(self):
-            debug("ClientInvite %s transitioning to 'proceeding'" % (self.peer,))
+            debug("ClientInvite %s transitioning to 'proceeding'" %
+                  (self.peer,))
 
         def messageReceived(self, msg):
             self.response = msg
@@ -1147,47 +1581,73 @@ class ClientInviteTransaction(AbstractClientTransaction):
                 self.tu.responseReceived(msg, self)
                 self.transitionTo('terminated')
             elif 300 <= msg.code < 700:
-                #XXX also important
-
+                #Important to send the ACK first, as above in the 'calling'
+                #state.
                 self.ack(msg)
                 self.transitionTo('completed')
                 self.tu.responseReceived(msg, self)
 
+
         def __exit__(self):
+            """
+            Remove the timer waiting for a response to cancellation, if any.
+            """
             if self.timerB.active():
                 self.timerB.cancel()
 
 
         def cancel(self):
+            """
+            Send a cancellation message.
+            """
             self.sendCancel()
-            #not exactly timer B but it oughta be
+            #not exactly timer B but it oughta be.  See last paragraph of
+            #section 9.1.
             self.timerB = clock.callLater(64*T1, self.cancel)
 
 
         def timeout(self):
-            if self.waitingToCancel:
-                self.response = responseFromRequest(487, self.request)
-            else:
-                self.response = responseFromRequest(408, self.request)
+            """
+            If no response is received for cancellation, terminate the
+            transaction after a while anyway.
+            """
+            self.response = responseFromRequest(487, self.request)
             self.transitionTo('terminated')
 
-    class completed(mode):
 
+    class completed(mode):
+        """
+        Behaviour for INVITE client transactions in the 'completed' state.
+        """
         def __enter__(self):
+            """
+            Set the timer for terminating the transaction.
+            """
             debug("ClientInvite %s transitioning to 'completed'" % (self.peer,))
             self.timerD = clock.callLater(32, self.transitionTo,
                                             'terminated')
 
         def messageReceived(self, msg):
+            """
+            ACK any further responses.
+            """
             if 300 <= msg.code:
                 self.ack(msg)
 
         def __exit__(self):
+            """
+            Cancel timer D if it hasn't fired.
+            """
             if self.timerD.active():
                 self.timerD.cancel()
 
         def cancel(self):
+            """
+            Too late to cancel, so don't do anything.
+            """
             pass
+
+
 
 class ClientTransaction(AbstractClientTransaction):
     initialMode = 'trying'
@@ -1504,8 +1964,8 @@ class SIPTransport(protocol.DatagramProtocol):
         #to wait until we can actually send packets to start
         self.tu.start(self)
 
-    def stopTransport(self, hard=False):
-        d1 = self.tu.stopTransactionUser(hard)
+    def stopTransport(self):
+        d1 = self.tu.stopTransactionUser()
         def stopRemainingTransactions(tuStopResult):
             """
             Stop any transactions that remain after the TU's
@@ -1526,9 +1986,9 @@ class SIPTransport(protocol.DatagramProtocol):
             """
             deferreds = []
             for ctx in self.clientTransactions.values():
-                dn = ctx.stopTransaction(hard)
+                dn = ctx.stopTransaction()
             for stx in self.serverTransactions.values():
-                dn = stx.stopTransaction(hard)
+                dn = stx.stopTransaction()
                 #deferreds.append(dn)
 
                 #deferreds.append(dn)
@@ -1584,7 +2044,7 @@ class SIPTransport(protocol.DatagramProtocol):
         # RFC 3581
         senderVia = parseViaHeader(message.headers["via"][0])
         senderVia.received = srcHost
-        if senderVia.rport == True:
+        if senderVia.rport is None:
             senderVia.rport = srcPort
         message.headers["via"][0] = senderVia.toString()
 
@@ -1647,7 +2107,7 @@ class SIPTransport(protocol.DatagramProtocol):
             #RFC 3261 18.1.1
             #RFC 3581 3
             msg.headers.setdefault('via', []).insert(0, Via(self.host, self.port,
-                                            rport=True,
+                                            rport=None,
                                             branch=computeBranch(msg)).toString())
         txt = msg.toString()
         if len(txt) > 1300:
@@ -1664,7 +2124,10 @@ class SIPTransport(protocol.DatagramProtocol):
         #RFC 3581 4
         via = parseViaHeader(msg.headers['via'][0])
         host = via.received or via.host
-        port = via.rport or via.port or self.PORT
+        if via.rport is not _absent:
+            port = via.rport
+        else:
+            port = via.port or self.PORT
 
         debug("Sending %r to %r" % (msg.code, (host, port)))
         self._resolveA(host).addCallback(
@@ -1736,7 +2199,11 @@ class ITransactionUser(Interface):
         message separately sent to L{responseReceived}.
         """
 
-#from resiprocate's proxy
+# When a SIP proxy forks a request and multiple non-success responses are
+# received, only one should be sent to the requester. The response with the
+# lowest-numbered priority is the one chosen. (Values adopted from
+# resiprocate's proxy.)
+
 responsePriorities = {                  428: 24, 429: 24, 494: 24,
     412: 1,                             413: 25, 414: 25,
     484: 2,                             421: 26,
@@ -1805,7 +2272,7 @@ class Proxy(SIPResolverMixin):
         self.recordroute = URL(host=transport.host,
                                port=transport.port, other={'lr':''})
 
-    def stopTransactionUser(self, hard):
+    def stopTransactionUser(self):
         return defer.succeed(True)
 
     def requestReceived(self, msg, addr):
@@ -1887,7 +2354,7 @@ class Proxy(SIPResolverMixin):
                 return None
         elif msg.method == 'ACK':
             msg.headers['via'].insert(0,Via(self.transport.host, self.transport.port,
-                                            rport=True,
+                                            rport=None,
                                             branch=computeBranch(msg)).toString())
             self.proxyRequestStatelessly(msg).addErrback(_statelessEB)
             return None
@@ -2383,7 +2850,7 @@ class RegistrationClient(SIPResolverMixin):
              for f, domain in regs:
                  self._lookupURI(domain).addCallback(f)
 
-    def stopTransactionUser(self, hard=False):
+    def stopTransactionUser(self):
         return defer.succeed(True)
 
     def register(self, username, password, domain):

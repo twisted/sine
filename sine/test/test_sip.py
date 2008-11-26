@@ -7,7 +7,7 @@ import textwrap
 from zope.interface import  implements
 
 from twisted.trial import unittest
-from sine import  sip
+from sine import sip
 from twisted.internet import defer, reactor, task
 
 from twisted.test import proto_helpers
@@ -275,6 +275,17 @@ class MessageParsingTestCase(unittest.TestCase):
                           "SIP/2.0/UDP proxy1.org:5060;branch=z9hG4bKcab2bd111444e23321d67d33584580b3;received=10.1.0.1",
                           "SIP/2.0/UDP client.com:5060;branch=z9hG4bK74bf9;received=10.0.0.1"])
 
+
+    def test_incomplete(self):
+        """
+        If the body is shorter than the content length given in the header,
+        the message should be regarded as corrupt and ignored.
+        """
+        self.feedMessage(request4[:-1])
+        self.assertEquals(len(self.l), 2)
+
+
+
 class MessageParsingTestCase2(MessageParsingTestCase):
     """Same as base class, but feed data char by char."""
 
@@ -332,7 +343,7 @@ class ViaTestCase(unittest.TestCase):
         self.assertEquals(v.ttl, None)
         self.assertEquals(v.maddr, None)
         self.assertEquals(v.branch, None)
-        self.assertEquals(v.hidden, 1)
+        self.assertEquals(v.hidden, True)
         self.assertEquals(v.toString(),
                           "SIP/2.0/UDP example.com:5060;hidden")
         self.checkRoundtrip(v)
@@ -342,7 +353,7 @@ class ViaTestCase(unittest.TestCase):
         self.checkRoundtrip(v)
 
     def testRPort(self):
-        v = sip.Via("foo.bar", rport=True)
+        v = sip.Via("foo.bar", rport=None)
         self.assertEquals(v.toString(), "SIP/2.0/UDP foo.bar:5060;rport")
 
     def testNAT(self):
@@ -355,6 +366,16 @@ class ViaTestCase(unittest.TestCase):
         self.assertEquals(v.rport, 12345)
 
         self.assertNotEquals(v.toString().find("rport=12345"), -1)
+
+
+    def test_unknownParams(self):
+       """
+       Parsing and serializing Via headers with unknown parameters should work.
+       """
+       s = "SIP/2.0/UDP example.com:5060;branch=a12345b;bogus;pie=delicious"
+       v = sip.parseViaHeader(s)
+       self.assertEqual(v.toString(), s)
+
 
 class URLTestCase(unittest.TestCase):
 
@@ -404,8 +425,15 @@ class ParseTestCase(unittest.TestCase):
             self.assertEquals(gparams, params)
 
     def testHeaderSplitting(self):
-        self.assertEquals(sip.splitMultiHeader(r'"fu\\" <sip:foo@example.com>, sip:bar@example.com'),
-                                              [r'"fu\\" <sip:foo@example.com>', ' sip:bar@example.com'])
+        """
+        L{sip.MessagesParser._splitMultiHeader} should produce a list of items
+        from the right-hand side of a multi-valued SIP header.
+        """
+        mp = sip.MessagesParser(None)
+        self.assertEquals(mp._splitMultiHeader(
+                r'"fu\\" <sip:foo@example.com>, sip:bar@example.com'),
+                          [r'"fu\\" <sip:foo@example.com>',
+                            ' sip:bar@example.com'])
 
 
 class PermissiveChecker:
@@ -510,7 +538,7 @@ class ProxyTestCase(unittest.TestCase):
     def tearDown(self):
         def finish(_):
             sip.clock = reactor
-        return self.sip.stopTransport(hard=True).addCallback(finish)
+        return self.sip.stopTransport().addCallback(finish)
 
     def testRequestForward(self):
         self.sip.datagramReceived(exampleInvite, (testurls["client.com"], 5060))
@@ -788,7 +816,7 @@ class LiveTest(unittest.TestCase):
     def tearDown(self):
         self.clientPort.stopListening()
         self.serverPort.stopListening()
-        self.transport.stopTransport(True)
+        self.transport.stopTransport()
         sip.clock = reactor
 
     def testRegister(self):
@@ -1576,11 +1604,15 @@ class DoubleStatefulProxyTestCase(unittest.TestCase):
         self.assertEquals(len(self.sip2.serverTransactions), 0)
 
     def resetq(self):
+        """
+        """
         del self.proxy1SendQueue[:]
         del self.proxy2SendQueue[:]
 
 
     def testNoResponse(self):
+        """
+        """
         #this test is a piece of crap, really, there need to be a lot
         #more asserts but at least the code path gets exercised =/
         self.invite()
@@ -1594,7 +1626,11 @@ class DoubleStatefulProxyTestCase(unittest.TestCase):
 
 
 class RegistrationClientTestCase(unittest.TestCase):
+    """
+    """
     def setUp(self):
+        """
+        """
         self.realm = TestRealm("proxy.com")
         self.realm.addUser('joe@proxy.com')
         self.portal = cred.portal.Portal(self.realm)
@@ -1632,12 +1668,16 @@ class RegistrationClientTestCase(unittest.TestCase):
         sip.clock = self.clock
 
     def tearDown(self):
+        """
+        """
         def reallyCleanUp(x):
-            self.proxyTransport.stopTransport(True)
-            self.clientTransport.stopTransport(True)
+            self.proxyTransport.stopTransport()
+            self.clientTransport.stopTransport()
             sip.clock = reactor
         return self.eventQueue.uponCompletion().addCallback(reallyCleanUp)
     def testSuccessfulRegistration(self):
+        """
+        """
         d = self.registrationClient.register("joe", "passXword", "proxy.com")
         def checkRegistrarBindings(_):
             self.assertEquals(self.proxy.portal.realm.regs, 1)

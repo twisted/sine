@@ -220,11 +220,37 @@ def respondToAuthChallenge(response, authdict, header):
                              if v])
     return response
 
-class Via:
-    """A SIP Via header."""
+_absent = object()
 
-    def __init__(self, host, port=PORT, transport="UDP", ttl=None, hidden=False,
-                 received=None, rport=None, branch=None, maddr=None):
+class Via:
+    """
+    A SIP Via header, representing a segment of the path taken by the request.
+
+    See RFC 3261, sections 8.1.1.7, 18.2.2, and 20.42.
+
+    @ivar transport: Network protocol used for this leg. (Probably either "TCP"
+    or "UDP".) Required.
+    @ivar branch: Unique identifier for this request. Required.
+    @ivar host: Hostname or IP for this leg. Required.
+    @ivar port: Port used for this leg.  Optional.
+
+    @ivar rport: Clients can set this to None to request RFC 3581
+    processing. Servers wishing to honor the request should set this parameter
+    to the source port the request was received from. Optional.
+
+    @ivar ttl: Time-to-live for requests on multicast paths.
+    @ivar maddr: The destination multicast address, if any.
+    @ivar hidden: Obsolete in SIP 2.0.
+
+    @ivar otherParams: A dict of any other parameters in the header.
+    """
+
+    def __init__(self, host, port=PORT, transport="UDP", ttl=None,
+                 hidden=False, received=None, rport=_absent, branch=None,
+                 maddr=None, **kw):
+        """
+        Set parameters of this Via header.
+        """
         self.transport = transport
         self.host = host
         self.port = port
@@ -234,22 +260,37 @@ class Via:
         self.rport = rport
         self.branch = branch
         self.maddr = maddr
+        self.otherParams = kw
+
 
     def toString(self):
         s = "SIP/2.0/%s %s:%s" % (self.transport, self.host, self.port)
         if self.hidden:
             s += ";hidden"
-        for n in "ttl", "branch", "maddr", "received", "rport":
+        for n in "ttl", "branch", "maddr", "received":
             value = getattr(self, n)
-            if value == True:
-                s += ";" + n
-            elif value != None:
+            if value is not None:
                 s += ";%s=%s" % (n, value)
+        if self.rport is None:
+            s += ";rport"
+        elif self.rport is not _absent:
+            s += ";rport=%s" % (self.rport,)
+
+        etc = self.otherParams.items()
+        etc.sort()
+        for k, v in etc:
+            if v is None:
+                s += ";" + k
+            else:
+                s += ";%s=%s" % (k, v)
         return s
 
 
+
 def parseViaHeader(value):
-    """Parse a Via header, returning Via class instance."""
+    """
+    Parse a Via header, returning Via class instance.
+    """
     try:
         parts = value.split(";")
         sent, params = parts[0], parts[1:]
@@ -277,15 +318,18 @@ def parseViaHeader(value):
                 continue
             parts = p.split("=", 1)
             if len(parts) == 1:
-                name, value = parts[0], True
+                name, value = parts[0], None
             else:
                 name, value = parts
                 if name in ("rport", "ttl"):
                     value = int(value)
             result[name] = value
         return Via(**result)
-    except Exception:
+    except Exception, e:
+        log.err(e)
         raise SIPError(400)
+
+
 
 class URL:
     """A SIP URL."""
@@ -652,6 +696,10 @@ class MessagesParser(basic.LineReceiver):
             raise SIPError(400)
 
     def dataDone(self):
+        """
+        Signal the end of the message if a complete message has been received,
+        and reset internal state to prepare for a new message.
+        """
         # clear out any buffered data that may be hanging around
         self.clearLineBuffer()
         if self.state == "firstline":
@@ -662,11 +710,12 @@ class MessagesParser(basic.LineReceiver):
         if self.length == None:
             # no content-length header, so end of data signals message done
             self.messageDone()
-        elif self.length < self.bodyReceived:
+        elif self.length > self.bodyReceived:
             # aborted in the middle
             self.reset()
         else:
-            # we have enough data and message wasn't finished? something is wrong
+            # we have enough data and message wasn't finished? something is
+            # wrong.
             raise RuntimeError, "corrupted or overflowed SIP packet"
 
     def dataReceived(self, data):
@@ -1066,7 +1115,7 @@ class ClientInviteTransaction(AbstractClientTransaction):
         ack.headers['max-forwards'] = ['70']
         ack.addHeader('via', Via(self.transport.host,
                                   self.transport.port,
-                                  rport=True,
+                                  rport=None,
                                   branch=self.branch).toString())
         self.transport.sendRequest(ack, self.peer)
 
@@ -1078,7 +1127,7 @@ class ClientInviteTransaction(AbstractClientTransaction):
         cancel.addHeader('cseq', "%s CANCEL" % self.request.headers['cseq'][0].split(' ',1)[0])
         cancel.addHeader('via', Via(self.transport.host,
                                     self.transport.port,
-                                    rport=True,
+                                    rport=None,
                                     branch=self.branch).toString())
         self.transport.sendRequest(cancel, self.peer)
 
@@ -1584,7 +1633,7 @@ class SIPTransport(protocol.DatagramProtocol):
         # RFC 3581
         senderVia = parseViaHeader(message.headers["via"][0])
         senderVia.received = srcHost
-        if senderVia.rport == True:
+        if senderVia.rport is None:
             senderVia.rport = srcPort
         message.headers["via"][0] = senderVia.toString()
 
@@ -1647,7 +1696,7 @@ class SIPTransport(protocol.DatagramProtocol):
             #RFC 3261 18.1.1
             #RFC 3581 3
             msg.headers.setdefault('via', []).insert(0, Via(self.host, self.port,
-                                            rport=True,
+                                            rport=None,
                                             branch=computeBranch(msg)).toString())
         txt = msg.toString()
         if len(txt) > 1300:
@@ -1664,7 +1713,10 @@ class SIPTransport(protocol.DatagramProtocol):
         #RFC 3581 4
         via = parseViaHeader(msg.headers['via'][0])
         host = via.received or via.host
-        port = via.rport or via.port or self.PORT
+        if via.rport is not _absent:
+            port = via.rport
+        else:
+            port = via.port or self.PORT
 
         debug("Sending %r to %r" % (msg.code, (host, port)))
         self._resolveA(host).addCallback(
@@ -1887,7 +1939,7 @@ class Proxy(SIPResolverMixin):
                 return None
         elif msg.method == 'ACK':
             msg.headers['via'].insert(0,Via(self.transport.host, self.transport.port,
-                                            rport=True,
+                                            rport=None,
                                             branch=computeBranch(msg)).toString())
             self.proxyRequestStatelessly(msg).addErrback(_statelessEB)
             return None

@@ -1490,6 +1490,7 @@ class ClientInviteTransaction(AbstractClientTransaction):
         self.transport.sendRequest(cancel, self.peer)
 
 
+
     class calling(mode):
         """
         Behaviour for INVITE client transactions in the 'calling' state.
@@ -1615,6 +1616,7 @@ class ClientInviteTransaction(AbstractClientTransaction):
             self.transitionTo('terminated')
 
 
+
     class completed(mode):
         """
         Behaviour for INVITE client transactions in the 'completed' state.
@@ -1650,11 +1652,25 @@ class ClientInviteTransaction(AbstractClientTransaction):
 
 
 class ClientTransaction(AbstractClientTransaction):
+    """
+    Implementation of non-INVITE client transactions.  See RFC 3261, section
+    17.1.2.
+
+    @ivar transport: The SIP transport protocol.
+    @ivar tu: An implementor if L{ITransactionUser}.
+    @ivar request: An INVITE L{Request}.
+    @ivar peer: The L{URI} the request is addressed to.
+    @ivar response: The L{Response} received to the request (or None if one has
+    not been received yet).
+    """
     initialMode = 'trying'
 
     terminated = AbstractClientTransaction.terminated
 
     def __init__(self, transport, tu, request, peerURL):
+        """
+        Set up initial values and register with the transport.
+        """
         self.tu = tu
         self.transport = transport
         self.request = request
@@ -1665,11 +1681,19 @@ class ClientTransaction(AbstractClientTransaction):
         self.__enter__()
 
     def sendRequest(self):
+        """
+        Send this transaction's request to its target.
+        """
         self.transport.sendRequest(self.request, self.peer)
 
     class trying(mode):
-
+        """
+        Behaviour for non-INVITE client transactions in the 'trying' state.
+        """
         def __enter__(self):
+            """
+            Upon switching to the 'trying' state, start timers E and F.
+            """
             debug("Client %s transitioning to 'trying'" % (self.peer,))
             self.timerETries = 0
             def timerERetry():
@@ -1678,50 +1702,71 @@ class ClientTransaction(AbstractClientTransaction):
                 self.timerE = clock.callLater(min((2**self.timerETries)*T1, T2),
                                   timerERetry)
             self.timerE = clock.callLater(T1, timerERetry)
-            self.timerF = clock.callLater(64*T1, self.transitionTo, 'terminated')
+            self.timerF = clock.callLater(64*T1, self.transitionTo,
+                                          'terminated')
             self.sendRequest()
 
         def messageReceived(self, msg):
+            """
+            Transition to 'completed' if a success response is received and
+            cancel timers E and F. Otherwise, transition to 'proceeding'. Then
+            send the response to the transaction user.
+            """
             if 200 <= msg.code:
                 self.response = msg
                 self.transitionTo('completed')
+                if self.timerE.active():
+                    self.timerE.cancel()
+                if self.timerF.active():
+                    self.timerF.cancel()
             else:
                 self.transitionTo('proceeding')
             self.tu.responseReceived(msg, self)
 
-
         def __exit__(self):
-            if self.timerE.active():
-                self.timerE.cancel()
-            if self.timerF.active():
-                self.timerF.cancel()
+            """
+            Do nothing.
+            """
+
 
     class proceeding(mode):
+        """
+        Behaviour for non-INVITE client transactions in the 'proceeding' state.
+        """
 
         def __enter__(self):
             debug("Client %s transitioning to 'proceeding'" % (self.peer,))
-            def timerERetry():
-                self.timerETries += 1
-                self.sendRequest()
-                self.timerE = clock.callLater(T2, timerERetry)
-            self.timerE = clock.callLater(T1, timerERetry)
-            self.timerF = clock.callLater(64*T1, self.transitionTo, 'terminated')
+
 
         def messageReceived(self, msg):
+            """
+            Pass response on to transaction user. If it's a success response,
+            transition to 'completed'.
+            """
             if 200 <= msg.code:
                 self.transitionTo('completed')
                 self.response = msg
             self.tu.responseReceived(msg, self)
 
+
         def __exit__(self):
+            """
+            Cancel timers E and F if still active.
+            """
             if self.timerE.active():
                 self.timerE.cancel()
             if self.timerF.active():
                 self.timerF.cancel()
 
     class completed(mode):
+        """
+        Behaviour for non-INVITE client transactions in the 'completed' state.
+        """
 
         def __enter__(self):
+            """
+            Start timer K.
+            """
             debug("Client %s transitioning to 'completed'" % (self.peer,))
             self.timerK = clock.callLater(T4, self.transitionTo,
                                             'terminated')
@@ -1732,58 +1777,110 @@ class ClientTransaction(AbstractClientTransaction):
             retransmissions that may be received (which is why the client
             transaction remains there only for unreliable transports).
             """
-        def __exit__(self):
-            if self.timerK.active():
-                self.timerK.cancel()
 
+        def __exit__(self):
+            """
+            Do nothing.
+            """
 
 class ServerInviteTransaction(AbstractTransaction):
 
+    """
+    Implementation of INVITE server transactions.  See RFC 3261, section
+    17.2.1.
+
+    @ivar transport: The SIP transport protocol.
+    @ivar tu: An implementor if L{ITransactionUser}.
+    @ivar peer: The L{URI} the request is from.
+    @ivar message: The L{Request} received by the transport.
+    @ivar lastResponse: The most recent L{Response} sent to the peer.
+    """
     initialMode = 'proceeding'
 
     def __init__(self, transport, tu, message, peerURL):
+        """
+        Set initial values.
+        """
         self.message = message
         self.tu = tu
         self.transport = transport
         self.peer = peerURL
         self.lastResponse = None
 
+
     def sentFinalResponse(self):
+        """
+        @return: whether the most recent response sent was a final response or
+        not.
+        """
         return self.lastResponse.code >= 200
 
+
     def send100(self, msg):
+        """
+        Send a 100 (Trying) response.
+        """
         self.sendResponse(responseFromRequest(100, msg))
 
+
     def respond(self, msg):
+        """
+        Send a L{Response} and remember it as the most recent.
+        """
         self.lastResponse = msg
         self.transport.sendResponse(msg)
 
+
     def repeatLastResponse(self):
+        """
+        Resend the most recent response in this transaction.
+        """
         self.transport.sendResponse(self.lastResponse)
 
+
     class proceeding(mode):
+        """
+        Behaviour for the 'proceeding' state.
+        """
 
         def __enter__(self):
-            debug("ServerInvite %s transitioning to 'proceeding'" % (self.peer,))
+            debug("ServerInvite %s transitioning to 'proceeding'" % (
+                    self.peer,))
+
 
         def __exit__(self):
-            pass
+            """
+            Do nothing.
+            """
 
-        def messageReceived(self, msg):
-            if msg.method == "INVITE":
+        def messageReceived(self, request):
+            """
+            Resend the response if resends of the INVITE are received.
+            """
+            if request.method == "INVITE":
                 self.repeatLastResponse()
 
-        def messageReceivedFromTU(self, msg):
-            self.respond(msg)
-            if 200 <= msg.code < 300:
+
+        def messageReceivedFromTU(self, response):
+            """
+            Send a response from the transaction user to the transport, and
+            change state if it's a final response.
+            """
+            self.respond(response)
+            if 200 <= response.code < 300:
                 self.transitionTo('terminated')
-            elif 300 <= msg.code < 700:
+            elif 300 <= response.code < 700:
                 self.transitionTo('completed')
 
 
     class completed(mode):
-
+        """
+        Behaviour for the 'completed' state.
+        """
         def __enter__(self):
+            """
+            Start timers G and H.
+            """
             debug("ServerInvite %s transitioning to 'completed'" % (self.peer,))
             self.timerGTries = 1
             def timerGRetry():
@@ -1797,15 +1894,25 @@ class ServerInviteTransaction(AbstractTransaction):
 
 
         def messageReceived(self, msg):
+            """
+            Respond to any resends of the INVITE while waiting for an ACK.
+            """
             if msg.method == "INVITE":
                 self.repeatLastResponse()
             elif msg.method == "ACK":
                 self.transitionTo('confirmed')
 
+
         def messageReceivedFromTU(self, msg):
-            pass
+            """
+            Ignore any further responses from the transaction user.
+            """
+
 
         def __exit__(self):
+            """
+            Cancel timers G and H, if they have not fired.
+            """
             if self.timerG.active():
                 self.timerG.cancel()
             if self.timerH.active():
@@ -1813,143 +1920,260 @@ class ServerInviteTransaction(AbstractTransaction):
 
 
     class confirmed(mode):
-
+        """
+        Behaviour for the 'confirmed' state.
+        """
         def __enter__(self):
+            """
+            Start timer I.
+            """
             debug("ServerInvite %s transitioning to 'confirmed'" % (self.peer,))
             self.timerI = clock.callLater(T4, self.transitionTo,
                                             'terminated')
 
+
         def messageReceived(self, msg):
-            pass
+            """
+            Ignore any further resends from the peer.
+            """
+
 
         def messageReceivedFromTU(self, msg):
-            pass
+            """
+            Ignore any further responses from the transaction user.
+            """
+
 
         def __exit__(self):
-            if self.timerI.active():
-                self.timerI.cancel()
+            """
+            Do nothing.
+            """
+
 
 
     class terminated(mode):
+        """
+        Behaviour for the 'terminated' state.
+        """
 
         def __enter__(self):
-            debug("ServerInvite %s transitioning to 'terminated'" % (self.peer,))
+            """
+            Unregister this transaction from the transport.
+            """
+            debug("ServerInvite %s transitioning to 'terminated'" % (
+                    self.peer,))
             self.transport.serverTransactionTerminated(self)
 
+
         def messageReceived(self, msg):
-            pass
+            """
+            Ignore any further resends from the peer.
+            """
+
 
         def messageReceivedFromTU(self, msg):
-            pass
+            """
+            Ignore any further responses from the transaction user.
+            """
+
 
         def __exit__(self):
-            pass
+            """
+            Do nothing.
+            """
 
 
 
 class ServerTransaction(AbstractTransaction):
+    """
+    Implementation of non-INVITE server transactions.  See RFC 3261, section
+    17.2.2.
+
+    @ivar transport: The SIP transport protocol.
+    @ivar tu: An implementor if L{ITransactionUser}.
+    @ivar peer: The L{URI} the request is from.
+    @ivar message: The L{Request} received by the transport.
+    @ivar lastResponse: The most recent L{Response} sent to the peer.
+    """
+
     initialMode = 'trying'
 
     def __init__(self, transport, tu, message, peerURL):
+        """
+        Set initial values.
+        """
         self.message = message
         self.transport = transport
         self.tu = tu
         self.peer = peerURL
         self.lastResponse = None
 
-    def repeatLastResponse(self):
-        self.transport.sendResponse(self.lastResponse)
 
     def respond(self, msg):
+        """
+        Send a L{Response} and remember it as the most recent.
+        """
         self.lastResponse = msg
         self.transport.sendResponse(msg)
 
-    class trying(mode):
 
+    def repeatLastResponse(self):
+        """
+        Resend the most recent response in this transaction.
+        """
+        self.transport.sendResponse(self.lastResponse)
+
+
+    class trying(mode):
+        """
+        Behaviour for the 'trying' state.
+        """
         def __enter__(self):
             debug("Server %s transitioning to 'trying'" % (self.peer,))
 
+
         def messageReceived(self, msg):
-            pass
+            """
+            Ignore any resends for now.
+            """
+
 
         def messageReceivedFromTU(self, msg):
+            """
+            When the transaction user provides a response, send it via the
+            transport and switch to 'proceeding' if it's provisional. Otherwise
+            transition to 'completed'.
+            """
             self.respond(msg)
             if 100 <= msg.code < 200:
                 self.transitionTo('proceeding')
             else:
                 self.transitionTo('completed')
 
+
         def __exit__(self):
-            pass
+            """
+            Do nothing.
+            """
+
 
     class proceeding(mode):
+        """
+        Behaviour for the 'proceeding' state.
+        """
 
         def __enter__(self):
             debug("Server %s transitioning to 'proceeding'" % (self.peer,))
 
         def messageReceived(self, msg):
+            """
+            Resend the provisional response to any request retransmissions.
+            """
             self.repeatLastResponse()
 
         def messageReceivedFromTU(self, msg):
+            """
+            Pass the transaction user's response to the transport. Transition
+            to 'completed' if it's a final response.
+            """
             self.respond(msg)
             if 200 <= msg.code < 700:
                 self.transitionTo('completed')
 
 
         def __exit__(self):
-            pass
+            """
+            Do nothing.
+            """
+
+
 
     class completed(mode):
+        """
+        Behaviour for the 'completed' state.
+        """
 
         def __enter__(self):
+            """
+            Start timer J.
+            """
             debug("Server %s transitioning to 'completed'" % (self.peer,))
             self.timerJ = clock.callLater(64*T1,
                                             self.transitionTo, 'terminated')
 
         def messageReceived(self, msg):
+            """
+            Resend the provisional response to any request retransmissions.
+            """
             self.repeatLastResponse()
 
+
         def messageReceivedFromTU(self, msg):
-            pass
+            """
+            Ignore any further responses from the transaction user.
+            """
 
         def __exit__(self):
-            if self.timerJ.active():
-                self.timerJ.cancel()
+            """
+            Do nothing.
+            """
+
 
 
     class terminated(mode):
+        """
+        Behaviour for the 'terminated' state.
+        """
 
         def __enter__(self):
+            """
+            Unregister this transaction with the transport.
+            """
             debug("Server %s transitioning to 'terminated'" % (self.peer,))
             self.transport.serverTransactionTerminated(self)
 
         def messageReceived(self, msg):
-            pass
+            """
+            Ignore any further retransmissions of the request.
+            """
 
         def messageReceivedFromTU(self, msg):
-            pass
+            """
+            Ignore any further responses from the transaction user.
+            """
+
 
         def __exit__(self):
-            pass
+            """
+            Do nothing.
+            """
 
 
-
-
-###############################################################################
 
 class SIPTransport(protocol.DatagramProtocol):
+    """
+    The UDP version of the transport layer of the SIP protocol. See RFC 3261
+    section 18.
+
+    @ivar tu: an implementor of L{ITransactionUser}.
+    @ivar hosts: A sequence of hostnames this element is authoritative for. The
+    first is used as the name for outgoing messages.
+    @ivar port: The port number this element listens on.
+    @ivar parser: A L{MessagesParser}.
+    @ivar messages: A list of L{Message}s not yet processed.
+    @ivar serverTransactions: A mapping of (branch, host, port, method) to
+    L{ServerTransaction} or L{ServerInviteTransaction} instances.
+    @ivar clientTransactions: A mapping of branch strings (from Via headers) to
+    L{ClientTransaction} or L{ClientInviteTransaction} instances.
+    """
 
     PORT = PORT
     debug = debuggingEnabled
 
     def __init__(self, tu, hosts, port):
-        """tu: an implementor of ITransactionUser.
-           hosts: A sequence of hostnames this element is
-                  authoritative for. The first is used as the name for
-                  outgoing messages. If empty, socket.getfqdn() is
-                  used instead.
-           port: The port this element listens on."""
-
+        """
+        Set initial values.
+        """
         self.messages = []
         self.parser = MessagesParser(self.addMessage)
         self.tu = tu
@@ -1959,12 +2183,18 @@ class SIPTransport(protocol.DatagramProtocol):
         self.serverTransactions = {}
         self.clientTransactions = {}
 
+
     def startProtocol(self):
-        #doing this here instead of in __init__ in case anything wants
-        #to wait until we can actually send packets to start
+        """
+        Start the transaction user, since the UDP port is now available.
+        """
         self.tu.start(self)
 
+
     def stopTransport(self):
+        """
+        Stop the transaction user and any remaining transactions.
+        """
         d1 = self.tu.stopTransactionUser()
         def stopRemainingTransactions(tuStopResult):
             """
@@ -1986,19 +2216,25 @@ class SIPTransport(protocol.DatagramProtocol):
             """
             deferreds = []
             for ctx in self.clientTransactions.values():
-                dn = ctx.stopTransaction()
+                ctx.stopTransaction()
             for stx in self.serverTransactions.values():
-                dn = stx.stopTransaction()
-                #deferreds.append(dn)
+                stx.stopTransaction()
 
-                #deferreds.append(dn)
             return defer.DeferredList(deferreds)
         return d1.addBoth(stopRemainingTransactions)
 
+
     def addMessage(self, msg):
+        """
+        Enqueue a received message to process.
+        """
         self.messages.append(msg)
 
+
     def datagramReceived(self, data, addr):
+        """
+        Feed received datagrams to the SIP parser.
+        """
         log.msg(interface=iaxiom.IStatEvent, stat_bandwidth_sip_down=len(data))
         try:
             self.parser.dataReceived(data)
@@ -2011,7 +2247,8 @@ class SIPTransport(protocol.DatagramProtocol):
                         else:
                             id = m.code
                         debug("Received %r from %r." % (id, addr))
-                        debug("Client transactions: %r" % (self.clientTransactions,))
+                        debug("Client transactions: %r" % (
+                                self.clientTransactions,))
                     if isinstance(m, Request):
                         self._fixupNAT(m, addr)
                         self.handle_request(m, addr)
@@ -2026,9 +2263,11 @@ class SIPTransport(protocol.DatagramProtocol):
             else:
                 self._badRequest(addr, e)
 
-    def _badRequest(self, addr, e):
-        #request parsing failed, we're going to have to make stuff up
 
+    def _badRequest(self, addr, e):
+        """
+        A request could not be parsed. Make an attempt to let the sender know.
+        """
         if isinstance(e, SIPError):
             code = e.code
         else:
@@ -2037,19 +2276,32 @@ class SIPTransport(protocol.DatagramProtocol):
 
         r.addHeader("to", "%s:%s" % (addr))
         # see RFC3261 8.1.1.7, 16.6.8
-        r.addHeader("via", Via(host=self.host, port=self.port, branch=VIA_COOKIE+ md5.new(repr(addr)).hexdigest()).toString())
+        r.addHeader("via",
+                    Via(host=self.host, port=self.port,
+                        branch=VIA_COOKIE+ md5.new(repr(addr)).hexdigest()
+                        ).toString())
         self.transport.write(r, addr)
 
+
     def _fixupNAT(self, message, (srcHost, srcPort)):
-        # RFC 3581
+        """
+        Set 'rport' in a response if the request asks for it. See RFC3581.
+        """
         senderVia = parseViaHeader(message.headers["via"][0])
         senderVia.received = srcHost
         if senderVia.rport is None:
             senderVia.rport = srcPort
         message.headers["via"][0] = senderVia.toString()
 
+
     def handle_request(self, msg, addr):
-        #RFC 3261 17.2.3
+        """
+        Match up a received request to a server transaction for processing. If
+        there is none, deliver it to the transaction user, and if it returns a
+        new server transaction, register it. See RFC 3261 sections 18.2.1 and
+        17.2.3.
+        """
+
         via = parseViaHeader(msg.headers['via'][0])
 
         if not (via.branch and via.branch.startswith(VIA_COOKIE)):
@@ -2071,7 +2323,9 @@ class SIPTransport(protocol.DatagramProtocol):
 
 
     def serverTransactionTerminated(self, st):
-        #Brutal, but simple
+        """
+        Unregister this server transaction.
+        """
         for k,v in self.serverTransactions.iteritems():
             if st == v:
                 del self.serverTransactions[k]
@@ -2079,22 +2333,28 @@ class SIPTransport(protocol.DatagramProtocol):
 
 
     def handle_response(self, msg, addr):
-        #RFC 3261 18.1.2
+        """
+        Match up this received response with a client transaction. If none can
+        be found, deliver it to the transaction user directly. See RFC 3261
+        sections 18.1.2 and 17.1.3.
+        """
         via = parseViaHeader(msg.headers['via'][0])
         if not (via.host in self.hosts and via.port == self.port):
             #drop silently
             return
-        #RFC 3261 17.1.3
         ct = self.clientTransactions.get(via.branch)
-        if ct and msg.headers['cseq'][0].split(' ')[1] == ct.request.headers['cseq'][0].split(' ')[1]:
+        if (ct and msg.headers['cseq'][0].split(' ')[1]
+            == ct.request.headers['cseq'][0].split(' ')[1]):
             ct.messageReceived(msg)
         else:
             self.tu.responseReceived(msg, None)
 
 
     def sendRequest(self, msg, target):
-        """Add a Via header to this message and send it to the (host,
-        port) target."""
+        """
+        Add a Via header to this message and send it to the target.  See RFC
+        3261 section 18.1.1.
+        """
 
         #CANCEL & ACK requires the same Via branch as the thing it is
         #cancelling/acking so it has to be added by the txn
@@ -2104,11 +2364,13 @@ class SIPTransport(protocol.DatagramProtocol):
             msg = msg.copy()
             if msg.headers.get('via'):
                 msg.headers['via'] = msg.headers['via'][:]
-            #RFC 3261 18.1.1
-            #RFC 3581 3
-            msg.headers.setdefault('via', []).insert(0, Via(self.host, self.port,
-                                            rport=None,
-                                            branch=computeBranch(msg)).toString())
+
+
+            msg.headers.setdefault('via', []).insert(
+                0,
+                Via(self.host, self.port,
+                    rport=None,
+                    branch=computeBranch(msg)).toString())
         txt = msg.toString()
         if len(txt) > 1300:
             raise NotImplementedError, "Message too big for UDP. You're boned."
@@ -2118,10 +2380,10 @@ class SIPTransport(protocol.DatagramProtocol):
 
 
     def sendResponse(self, msg):
-        """Determine the target for the response and send it."""
-
-        #RFC 3261 18.2.2
-        #RFC 3581 4
+        """
+        Determine the target for the response and send it. See RFC 3261 section
+        18.2.2 and RFC 3581 section 4.
+        """
         via = parseViaHeader(msg.headers['via'][0])
         host = via.received or via.host
         if via.rport is not _absent:
@@ -2134,12 +2396,19 @@ class SIPTransport(protocol.DatagramProtocol):
             lambda ip: self.sendMessage(msg, (ip, port)))
 
     def sendMessage(self, msg, (host, port)):
+        """
+        Actually convert a L{Message} to bytes and deliver it over the network.
+        """
         data = msg.toString()
         log.msg(interface=iaxiom.IStatEvent, stat_bandwidth_sip_up=len(data))
         self.transport.write(data, (host, port))
 
     def _resolveA(self, addr):
+        """
+        Resolve a hostname to an address. Defined here for ease of testing.
+        """
         return reactor.resolve(addr)
+
 
 
 class ITransactionUser(Interface):

@@ -2065,11 +2065,13 @@ class ServerTransaction(AbstractTransaction):
         def __enter__(self):
             debug("Server %s transitioning to 'proceeding'" % (self.peer,))
 
+
         def messageReceived(self, msg):
             """
             Resend the provisional response to any request retransmissions.
             """
             self.repeatLastResponse()
+
 
         def messageReceivedFromTU(self, msg):
             """
@@ -2101,6 +2103,7 @@ class ServerTransaction(AbstractTransaction):
             self.timerJ = clock.callLater(64*T1,
                                             self.transitionTo, 'terminated')
 
+
         def messageReceived(self, msg):
             """
             Resend the provisional response to any request retransmissions.
@@ -2108,10 +2111,12 @@ class ServerTransaction(AbstractTransaction):
             self.repeatLastResponse()
 
 
+
         def messageReceivedFromTU(self, msg):
             """
             Ignore any further responses from the transaction user.
             """
+
 
         def __exit__(self):
             """
@@ -2132,10 +2137,12 @@ class ServerTransaction(AbstractTransaction):
             debug("Server %s transitioning to 'terminated'" % (self.peer,))
             self.transport.serverTransactionTerminated(self)
 
+
         def messageReceived(self, msg):
             """
             Ignore any further retransmissions of the request.
             """
+
 
         def messageReceivedFromTU(self, msg):
             """
@@ -2395,6 +2402,7 @@ class SIPTransport(protocol.DatagramProtocol):
         self._resolveA(host).addCallback(
             lambda ip: self.sendMessage(msg, (ip, port)))
 
+
     def sendMessage(self, msg, (host, port)):
         """
         Actually convert a L{Message} to bytes and deliver it over the network.
@@ -2402,6 +2410,7 @@ class SIPTransport(protocol.DatagramProtocol):
         data = msg.toString()
         log.msg(interface=iaxiom.IStatEvent, stat_bandwidth_sip_up=len(data))
         self.transport.write(data, (host, port))
+
 
     def _resolveA(self, addr):
         """
@@ -2432,11 +2441,13 @@ class ITransactionUser(Interface):
 
     """
 
+
     def start(transport):
         """Connects the transport to the TU.
 
         @param transport: a SIPTransport instance.
         """
+
 
     def requestReceived(msg, addr):
         """Processes a message, after the transport and transaction
@@ -2447,6 +2458,7 @@ class ITransactionUser(Interface):
         @param msg: a sip.Message instance
         @param addr: a C{(host, port)} tuple
         """
+
 
     def responseReceived(msg, ct=None):
         """Processes a response received from the transport, along
@@ -2459,6 +2471,7 @@ class ITransactionUser(Interface):
         is a part of.
         """
 
+
     def clientTransactionTerminated(ct):
         """Called when a client transaction created by this TU
         transitions to the 'terminated' state.
@@ -2467,6 +2480,8 @@ class ITransactionUser(Interface):
         instance that has been terminated, either by a timeout or by a
         message separately sent to L{responseReceived}.
         """
+
+
 
 # When a SIP proxy forks a request and multiple non-success responses are
 # received, only one should be sent to the requester. The response with the
@@ -2487,10 +2502,20 @@ responsePriorities = {                  428: 24, 429: 24, 494: 24,
     580: 22,                            483: 41, 482: 41,
     485: 23,                            408: 49}
 
-class SIPResolverMixin:
 
+class SIPResolverMixin:
+    """
+    A mixin class for looking up targets for SIP URIs, using SRV records if
+    they exist.
+    """
     def _lookupURI(self, userURI):
-        #RFC 3263 4.2
+        """
+        Look up SRV records for a SIP URI and find all the targets that
+        requests can be sent to. See RFC 3261, section 4.2.
+
+        @return: A Deferred that fires with a list of (host, port) pairs.
+        """
+
         if abstract.isIPAddress(userURI.host):
             # it is an IP not a hostname
             if not userURI.port:
@@ -2503,10 +2528,15 @@ class SIPResolverMixin:
             d.addCallback(self._resolveSRV, userURI)
             return d
 
-    def _resolveSRV(self, (answers, _, __), userURI):
 
+    def _resolveSRV(self, (answers, _, __), userURI):
+        """
+        Collect SRV records and return the addresses from them in priority
+        order, if any. Otherwise just use the original URI's hostname.
+        """
         if answers:
-            answers = [(a.payload.priority, str(a.payload.target), a.payload.port) for a in answers]
+            answers = [(a.payload.priority, str(a.payload.target),
+                        a.payload.port) for a in answers]
             answers.sort()
             return [(answer[1], answer[2]) for answer in answers]
         else:
@@ -2514,25 +2544,66 @@ class SIPResolverMixin:
             return [(userURI.host, 5060)]
 
 
+
 class Proxy(SIPResolverMixin):
+    """
+    A SIP proxy providing both stateful and stateless behaviour, as described
+    in RFC 3261 section 16.
+
+    @ivar portal: A L{twisted.cred.portal.Portal}.
+    @ivar registrar: A L{Registrar}, for authorizing proxy users.
+    @ivar transport: A L{SIPTransport} for sending and receiving SIP messages.
+    @ivar registrationClient: A L{RegistrationClient}, or None. Used to
+    register with a remote host.
+
+    @ivar responseContexts: A mapping of client transactions to a (server
+    transaction, timer C) pair.
+    @ivar finalResponses: A mapping of server transactions to the L{Response}s
+    they send.
+
+    @ivar proxyAuthorizations: A mapping of domain names to (user, password)
+    pairs, for use with hosts that require authorization to process requests
+    from us.
+    @ivar authRetries: A mapping of server transactions to the number of auth
+    attempts they have made.
+    @ivar domains: A list of domains this proxy is authoritative for.
+    @ivar recordroute: The Record-Route header added by this proxy to
+    requests. See RFC 3261, section 16.6.4.
+    """
     implements(ITransactionUser)
 
     def __init__(self, portal):
+        """
+        Set up initial values.
+        """
         self.portal = portal
-        self.sessions = {}
         self.responseContexts = {}
         self.finalResponses = {}
         self.registrar = Registrar(portal)
         self.registrationClient = None
         self.proxyAuthorizations = {}
         self.authRetries = {}
+
+
     def installRegistrationClient(self, rc):
+        """
+        Install a L{RegistrationClient}, which will be started up when this
+        proxy is connected to a transport.
+        """
         self.registrationClient = rc
 
+
     def addProxyAuthentication(self, user, domain, passwd):
+        """
+        Add credentials for communicating with the proxy for C{domain}.
+        """
         self.proxyAuthorizations[domain] = (user, passwd)
 
+
     def start(self, transport):
+        """
+        Connect this proxy to a SIP transport.
+        """
         self.domains = [transport.host]
         self.transport = transport
         self.registrar.start(transport)
@@ -2541,10 +2612,19 @@ class Proxy(SIPResolverMixin):
         self.recordroute = URL(host=transport.host,
                                port=transport.port, other={'lr':''})
 
+
     def stopTransactionUser(self):
+        """
+        Do nothing on shutdown.
+        """
         return defer.succeed(True)
 
+
     def requestReceived(self, msg, addr):
+        """
+        Accept SIP requests and forward them to the appropriate target. See
+        RFC3261, sections 16.3-16.6.
+        """
         #RFC 3261 16.4
         if msg.uri == self.recordroute:
             msg.uri = parseAddress(msg.headers['route'].pop())[1]
@@ -2564,8 +2644,8 @@ class Proxy(SIPResolverMixin):
                 st.messageReceivedFromTU(responseFromRequest(200, msg))
                 return st
 
-        #teliax is kinda weird and sends an OPTIONS request to the url we register as
-
+        #Some Asterisk hosts will send OPTIONS requests to us at the URI we
+        #provided for registration. Respond to them here.
         if (msg.uri.host in self.proxyAuthorizations and
             msg.uri.username == self.proxyAuthorizations[msg.uri.host][0] and
             msg.method == 'OPTIONS'):
@@ -2583,8 +2663,6 @@ class Proxy(SIPResolverMixin):
                 errcode = err.value.code
                 err = None
             else:
-                if debuggingEnabled:
-                    import pdb; pdb.set_trace()
                 errcode = 500
                 log.err(err)
             st.messageReceivedFromTU(
@@ -2622,9 +2700,11 @@ class Proxy(SIPResolverMixin):
                 self.proxyRequestStatelessly(msg).addErrback(_statelessEB)
                 return None
         elif msg.method == 'ACK':
-            msg.headers['via'].insert(0,Via(self.transport.host, self.transport.port,
+            msg.headers['via'].insert(0,Via(self.transport.host,
+                                            self.transport.port,
                                             rport=None,
-                                            branch=computeBranch(msg)).toString())
+                                            branch=computeBranch(msg)
+                                            ).toString())
             self.proxyRequestStatelessly(msg).addErrback(_statelessEB)
             return None
         else:
@@ -2635,30 +2715,47 @@ class Proxy(SIPResolverMixin):
                 self.untrackSession(msg)
             return st
 
+
     def proxyRequestStatelessly(self, originalMsg):
+        """
+        Forward a request to its target without tracking any transaction state
+        for it.
+        """
         def _cb(addrs):
             msg, addr = self.processRouting(originalMsg, addrs[0])
             self.transport.sendRequest(msg, (addr.host, addr.port))
         fromURL = parseAddress(originalMsg.headers['from'][0])[1]
         return self.findTargets(originalMsg.uri, fromURL).addCallback(_cb)
 
+
     def findTargets(self, addr, caller):
+        """
+        Look up a SIP URI via cred, if it's in a domain this proxy handles,
+        fetching the URI to forward to. Otherwise, return the URI itself.
+        """
         d = self.portal.login(Preauthenticated(addr.toCredString()),
                               None, IContact)
 
         def lookedUpSuccessful((ifac, contact, logout)):
-            return defer.maybeDeferred(contact.getRegistrationInfo,
-                                       caller
-                                       ).addCallback( lambda x: [i[0] for i in x])
+            return defer.maybeDeferred(
+                contact.getRegistrationInfo,
+                caller
+                ).addCallback(lambda x: [i[0] for i in x])
+
         def failedLookup(err):
             err.trap(UnauthorizedLogin)
             if addr.host not in self.domains:
                 return [addr]
             else:
                 raise SIPLookupError(604)
+
         return d.addCallback(lookedUpSuccessful).addErrback(failedLookup)
 
+
     def forwardRequest(self, targets, originalMsg, st):
+        """
+        Route the given request to the list of targets.
+        """
         fs = []
         if len(targets) == 0:
             raise SIPLookupError(480)
@@ -2668,7 +2765,12 @@ class Proxy(SIPResolverMixin):
             fs.append(self._lookupURI(addr).addCallback(self._forward,msg, st))
         return defer.DeferredList(fs)
 
+
     def processRouting(self, originalMsg, addr):
+        """
+        Create a new copy of the request received, decrementing the value in
+        the 'max-forwards' header and inserting routing information.
+        """
         #16.6
         msg = originalMsg.copy()
         msg.uri = addr
@@ -2677,8 +2779,9 @@ class Proxy(SIPResolverMixin):
                 msg.headers['max-forwards'][0]) - 1)
         else:
             msg.headers['max-forwards'] = ['70']
-        msg.headers.setdefault('record-route',
-                               []).insert(0, formatAddress(('', self.recordroute.toString(), {})))
+        msg.headers.setdefault(
+            'record-route',
+            []).insert(0, formatAddress(('', self.recordroute.toString(), {})))
         if msg.headers.get('route', None):
             if 'lr' not in parseAddress(msg.headers['route'][0])[1].other:
                 #more coping with strict routers
@@ -2688,7 +2791,13 @@ class Proxy(SIPResolverMixin):
                 addr = parseAddress(msg.headers['route'][0])[1]
         return msg, addr
 
+
     def _forward(self, addresses, msg, st):
+        """
+        Create client transactions for each target address with the request and
+        associate them with the server transaction the request was received
+        from.
+        """
         for address in addresses:
             #16.6.8
             if msg.method == 'INVITE':
@@ -2702,15 +2811,24 @@ class Proxy(SIPResolverMixin):
             self.responseContexts[ct] = (st, timerC)
             self.responseContexts.setdefault(st, []).append(ct)
 
+
     def checkInviteAuthorization(self, message):
+        """
+        Ensure that at least one of the caller or the recipient are authorized
+        to send messages through this proxy.
+        """
         name, uri, tags = parseAddress(message.headers["to"][0], clean=1)
-        fromname, fromuri, ignoredTags = parseAddress(message.headers["from"][0], clean=1)
+        fromname, fromuri, ignoredTags = parseAddress(
+            message.headers["from"][0], clean=1)
         somebodyWasAuthorized = []
         def recordIt(oururi, theiruri, method, *extra):
             #XXX XXX totally need to check to see if the invite is
             #from a registered address
-            d = self.portal.login(Preauthenticated('%s@%s' % (oururi.username, oururi.host)), None, IContact)
-            def success((iface, contact, logout), theiruri=theiruri, method=method):
+            d = self.portal.login(Preauthenticated('%s@%s' % (oururi.username,
+                                                              oururi.host)),
+                                  None, IContact)
+            def success((iface, contact, logout),
+                        theiruri=theiruri, method=method):
                 somebodyWasAuthorized.append(contact)
                 getattr(contact,method)(name, theiruri, *extra)
                 return contact
@@ -2760,6 +2878,11 @@ class Proxy(SIPResolverMixin):
 
 
     def clientTransactionTerminated(self, ct):
+        """
+        When all the client transactions associated with a particular server
+        transaction terminate, choose a final response to deliver via the
+        server transaction, and send it.
+        """
         st = self.responseContexts.get(ct)
         if not st:
             #whoops, someone got here before we did
@@ -2795,8 +2918,15 @@ class Proxy(SIPResolverMixin):
 
 
     def retryWithProxyAuth(self, st, response, target):
+        """
+        Resend a request after adding a Proxy-Authorization header with a
+        response to a challenge in the original response. See RFC 3261, section
+        22.3.
+        """
         message = st.message.copy()
-        auth = respondToAuthChallenge(response, self.proxyAuthorizations, 'proxy-authenticate')
+        auth = respondToAuthChallenge(response,
+                                      self.proxyAuthorizations,
+                                      'proxy-authenticate')
         if not auth:
             #we're doomed, give up
             return None
@@ -2806,7 +2936,13 @@ class Proxy(SIPResolverMixin):
         message.headers['cseq'] = ["%s %s" % (int(cseq)+1, cmethod)]
         self._forward([target], message, st)
 
+
     def chooseFinalResponse(self, st):
+        """
+        When a request is forked to multiple targets, choose a single response
+        from the collection of responses returned from each fork to deliver to
+        the original requestor.  See RFC 3261, section 16.7.6.
+        """
         cts = self.responseContexts[st]
         noResponses = True
         responses = [(ct.response and ct.response.code, ct) for ct in cts]
@@ -2817,7 +2953,8 @@ class Proxy(SIPResolverMixin):
             if code is not None and code >= 200:
                 noResponses = False
                 break
-        assert not noResponses, "BROKEN. chooseFinalResponse was called before any final responses occurred."
+        assert not noResponses, ("BROKEN. chooseFinalResponse was called"
+                                 " before any final responses occurred.")
 
 
         prioritizedResponses = []
@@ -2858,8 +2995,10 @@ class Proxy(SIPResolverMixin):
 
 
     def responseReceived(self, msg, ct=None):
-        #RFC 3261 16.7
-
+        """
+        Accept SIP responses and (possibly) deliver them to the originator of
+        the request that they respond to. See RFC 3261, section 16.7.
+        """
         if msg.code == 100:
             return
         msg.headers['via'] = msg.headers['via'][1:]
@@ -2956,6 +3095,7 @@ class Proxy(SIPResolverMixin):
 
         st.messageReceivedFromTU(msg)
 
+
     def processLocalResponse(self, msg, ct):
         """
         You might want to override this in subclasses of proxy to
@@ -2966,17 +3106,30 @@ class Proxy(SIPResolverMixin):
         """
         debug("Unhandled local SIP message: %s" % (msg,))
 
+
     def cancelPendingClients(self, st):
+        """
+        Cancel all remaining client transactions for this server transaction.
+        """
         if isinstance(st, ServerInviteTransaction):
             cts = self.responseContexts.get(st, [])
             for ct in cts:
                 ct.cancel()
 
+
     def trackSession(self, msg):
+        """
+        Hook for tracking when calls start.
+        """
         pass
 
+
     def untrackSession(self, msg):
+        """
+        Hook for tracking when calls end.
+        """
         pass
+
 
 
 class Registrar:

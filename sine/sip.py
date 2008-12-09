@@ -3133,16 +3133,32 @@ class Proxy(SIPResolverMixin):
 
 
 class Registrar:
+    """
+    A registrar as described in RFC 3261, section 10.3. This element listens
+    for REGISTER requests and maintains a list of bindings.
+
+    @ivar portal: The L{twisted.cred.portal.Portal} used for authentication.
+    @ivar transport: A L{SIPTransport} for sending and receiving SIP messages.
+    """
     authorizers = {
         'digest': DigestAuthorizer(),
         }
     def __init__(self, portal):
+        """
+        Hook up the portal.
+        """
         self.portal = portal
 
     def start(self, transport):
+        """
+        Hook up the SIP transport.
+        """
         self.transport = transport
 
     def requestReceived(self, msg, addr):
+        """
+        Handle registration messages, return error messages for anything else.
+        """
         st = ServerTransaction(self.transport, self, msg, addr)
         if msg.method == "REGISTER":
             self.registrate(msg, addr).addCallback(st.messageReceivedFromTU)
@@ -3151,6 +3167,9 @@ class Registrar:
         return st
 
     def registrate(self, message, addr):
+        """
+        Do cred logins for REGISTER requests.
+        """
         name, toURL, params = parseAddress(message.headers["to"][0], clean=1)
         if not message.headers.has_key("authorization"):
             creds = credentials.UsernamePassword(toURL.toCredString(),'')
@@ -3168,13 +3187,23 @@ class Registrar:
             ).addErrback(self._ebLogin, message, addr)
 
     def _cbLogin(self, (i, a, l), message, addr):
+        """
+        Return a success message upon successful cred login.
+        """
         return self.register(a, message, addr)
 
     def _ebLogin(self, failure, message, addr):
+        """
+        Return an auth challenge upon cred login failure.
+        """
         failure.trap(UnauthorizedLogin)
         return self.unauthorized(message, addr)
 
     def register(self, avatar, message, addr):
+        """
+        Create (or delete) a registration binding and return a success message
+        describing the outcome of the operation requested.
+        """
         def _cbRegister(regdata, message):
             response = responseFromRequest(200, message)
             #for old times' sake I will send a separate Expires header
@@ -3215,17 +3244,18 @@ class Registrar:
         expires = message.headers.get("expires", [None])[0]
         if expires == "0":
             if contact == "*":
-                return defer.maybeDeferred(avatar.unregisterAllAddresses).addCallback(
-                    _cbUnregister, message
-                    ).addErrback(_ebUnregister, message)
+                return defer.maybeDeferred(
+                    avatar.unregisterAllAddresses).addCallback(
+                    _cbUnregister, message).addErrback(
+                    _ebUnregister, message)
             else:
-                name, contactURL, params = parseAddress(contact) #host=addr.host, port=addr.port)
+                name, contactURL, params = parseAddress(contact)
                 return defer.maybeDeferred(avatar.unregisterAddress,
                                     contactURL).addCallback(
                     _cbUnregister, message).addErrback(
                     _ebUnregister, message)
         else:
-            name, contactURL, params = parseAddress(contact)# host=addr.host, port=addr.port)
+            name, contactURL, params = parseAddress(contact)
 
             if contact is not None:
                 if expires:
@@ -3235,15 +3265,17 @@ class Registrar:
                 d = defer.maybeDeferred(avatar.registerAddress,
                                         contactURL, expiresInt)
             else:
-                name, toURL, params = parseAddress(message.headers["to"][0], clean=1)
+                name, toURL, params = parseAddress(message.headers["to"][0],
+                                                   clean=1)
                 d = defer.maybeDeferred(avatar.getRegistrationInfo, toURL)
             d.addCallback(_cbRegister, message).addErrback(self._ebLogin,
                                                            message, addr)
             return d
 
     def unauthorized(self, message, addr):
-        # log.msg("Failed registration attempt for %s from %s" %
-        # (message.headers.get('from'), message.headers.get('contact')))
+        """
+        Return a failure response with an authentication challenge.
+        """
         m = responseFromRequest(401, message)
         for (scheme, auth) in self.authorizers.iteritems():
             chal = auth.getChallenge(addr)
@@ -3254,6 +3286,8 @@ class Registrar:
                                               self.transport.host)
             m.headers.setdefault('www-authenticate', []).append(value)
         return m
+
+
 
 class RegistrationClient(SIPResolverMixin):
     implements(ITransactionUser)

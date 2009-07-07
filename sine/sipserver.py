@@ -14,10 +14,9 @@ from epsilon.extime import Time
 
 from axiom import userbase, batch
 from axiom.attributes import integer, inmemory, bytes, text, reference, timestamp
-from axiom.item import Item
+from axiom.item import Item, declareLegacyItem
 from axiom.errors import NoSuchUser
 from axiom.userbase import LoginSystem
-from axiom.scheduler import Scheduler
 from axiom.dependency import dependsOn
 from axiom.upgrade import registerUpgrader
 
@@ -43,7 +42,7 @@ def getHostnames(store):
 
 class SIPServer(Item, Service):
     typeName = 'mantissa_sip_powerup'
-    schemaVersion = 2
+    schemaVersion = 3
     portno = integer(default=5060)
     pstn = bytes()
     parent = inmemory()
@@ -57,7 +56,6 @@ class SIPServer(Item, Service):
     site = inmemory()
     transport = inmemory()
 
-    scheduler = dependsOn(Scheduler)
     userbase = dependsOn(LoginSystem)
 
     powerupInterfaces = (IService,)
@@ -128,11 +126,26 @@ def sipServer1to2(old):
     ss = old.upgradeVersion(old.typeName, 1, 2)
     ss.portno = old.portno
     ss.pstn = old.pstn
-    ss.scheduler = old.store.findOrCreate(Scheduler)
     ss.userbase = old.store.findOrCreate(LoginSystem)
     return ss
 
 registerUpgrader(sipServer1to2, SIPServer.typeName, 1, 2)
+
+declareLegacyItem(
+    SIPServer.typeName, 2,
+    dict(portno=integer(),
+         pstn=bytes(),
+         scheduler=reference(),
+         userbase=reference()))
+
+def sipServer2to3(old):
+    ss = old.upgradeVersion(old.typeName, 2, 3)
+    ss.portno = old.portno
+    ss.pstn = old.pstn
+    ss.userbase = old.userbase
+    return ss
+
+registerUpgrader(sipServer2to3, SIPServer.typeName, 2, 3)
 
 class Registration(Item):
     typename = "sine_registration"
@@ -374,7 +387,7 @@ registerAdapter(TrivialContactFragment, TrivialContact, ixmantissa.INavigableFra
 
 class SIPDispatcherService(Item, Service):
     typeName = 'sine_sipdispatcher_service'
-    schemaVersion = 2
+    schemaVersion = 3
     portno = integer(default=5060)
 
     parent = inmemory()
@@ -386,7 +399,6 @@ class SIPDispatcherService(Item, Service):
     port = inmemory()
     site = inmemory()
 
-    scheduler = dependsOn(Scheduler)
     userbase = dependsOn(LoginSystem)
 
     powerupInterfaces = (IService,)
@@ -403,11 +415,24 @@ class SIPDispatcherService(Item, Service):
 def sipDispatcher1to2(old):
     ss = old.upgradeVersion(old.typeName, 1, 2)
     ss.portno = old.portno
-    ss.scheduler = old.store.findOrCreate(Scheduler)
     ss.userbase = old.store.findOrCreate(LoginSystem)
     return ss
 
 registerUpgrader(sipDispatcher1to2, SIPDispatcherService.typeName, 1, 2)
+
+declareLegacyItem(
+    SIPDispatcherService.typeName, 2,
+    dict(portno=integer(),
+         scheduler=reference(),
+         userbase=reference()))
+
+def sipDispatcher2to3(old):
+    return old.upgradeVersion(SIPDispatcherService.typeName, 2, 3,
+                              portno=old.portno,
+                              userbase=old.userbase)
+
+registerUpgrader(sipDispatcher2to3, SIPDispatcherService.typeName, 2, 3)
+
 
 class Call(Item):
     typeName = "sine_call"

@@ -3,7 +3,7 @@ import os
 from twisted.cred import portal
 from epsilon.scripts import certcreate
 
-from axiom import errors as scheduler, userbase
+from axiom import errors as userbase
 from axiom.scripts import axiomatic
 from axiom.dependency import installOn
 
@@ -26,7 +26,6 @@ class Install(axiomatic.AxiomaticSubCommand):
 
     def postOptions(self):
         s = self.parent.getStore()
-        s.findOrCreate(scheduler.Scheduler, lambda i: installOn(i, s))
         s.findOrCreate(userbase.LoginSystem, lambda i: installOn(i, s))
 
         for ws in s.query(website.WebSite):

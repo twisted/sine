@@ -1,3 +1,13 @@
+0.3.0 (2009-11-25):
+  - Various test suite improvements.
+  - Some dead code removed.
+  - Deprecate `IPreauthCredentials`.
+  - Use Mantissa's static web content feature for CSS and JavaScript.
+  - Provide a version plugin to allow Axiom to record version information
+    about the Sine scheme.
+  - Some SIP protocol implementation bugs fixed (particularly to do with
+    rport handling).
+
 0.2.0 (2007-01-23):
   - Updated to work with new Axiom dependency API.
 

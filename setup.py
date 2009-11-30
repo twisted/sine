@@ -16,8 +16,17 @@ setuphelper.autosetup(
         built as an offering for the Mantissa application server platform.
         """,
     classifiers=[
+        "Development Status :: 3 - Alpha",
+        "Framework :: Twisted",
         "Intended Audience :: Developers",
+        "Intended Audience :: System Administrators",
+        "Intended Audience :: Telecommunications Industry",
+        "License :: OSI Approved :: MIT License",
         "Programming Language :: Python",
-        "Development Status :: 2 - Pre-Alpha",
-        "Topic :: Internet"],
+        "Topic :: Communications :: Conferencing",
+        "Topic :: Communications :: Internet Phone",
+        "Topic :: Communications :: Telephony",
+        "Topic :: Internet",
+        "Topic :: Multimedia :: Sound/Audio",
+        ],
     )

@@ -16,7 +16,7 @@ from twisted.cred.error import UnauthorizedLogin
 from twisted.python import log
 from axiom import batch
 from axiom.errors import NoSuchUser
-import random, wave, md5
+import random, wave, hashlib
 from zope.interface import Interface, implements
 from epsilon import juice
 
@@ -378,7 +378,7 @@ class Dialog:
         invite.addHeader("to", formatAddress(uri))
         invite.addHeader("from", formatAddress((fromName, URL(contacturi.host, contacturi.username), {'tag': self.genTag()})))
         invite.addHeader("call-id",
-                         "%s@%s" % (md5.md5(str(random.random())).hexdigest(),
+                         "%s@%s" % (hashlib.md5(str(random.random())).hexdigest(),
                                     contacturi.host))
         invite.addHeader("cseq", "%s INVITE" % self.localCSeq)
         invite.addHeader("user-agent", "Divmod Sine")

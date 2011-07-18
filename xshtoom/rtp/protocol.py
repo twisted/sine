@@ -3,7 +3,7 @@
 # $Id: rtp.py,v 1.40 2004/03/07 14:41:39 anthony Exp $
 #
 
-import random, os, md5, socket
+import random, os, hashlib, socket
 from time import time
 
 from twisted.internet import reactor, defer
@@ -327,7 +327,7 @@ class RTPProtocol(DatagramProtocol):
 
     def genSSRC(self):
         # Python-ish hack at RFC1889, Appendix A.6
-        m = md5.new()
+        m = hashlib.md5()
         m.update(str(time()))
         m.update(str(id(self)))
         if hasattr(os, 'getuid'):
@@ -344,7 +344,7 @@ class RTPProtocol(DatagramProtocol):
 
     def genInitTS(self):
         # Python-ish hack at RFC1889, Appendix A.6
-        m = md5.new()
+        m = hashlib.md5()
         m.update(str(self.genSSRC()))
         m.update(str(time()))
         hex = m.hexdigest()
@@ -367,7 +367,7 @@ class RTPProtocol(DatagramProtocol):
         if os.path.exists("/dev/urandom"):
             hex = open('/dev/urandom').read(16).encode("hex")
         else:
-            m = md5.new()
+            m = hashlib.md5()
             m.update(str(time()))
             m.update(str(random.random()))
             m.update(str(id(self.dest)))

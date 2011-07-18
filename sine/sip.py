@@ -5,7 +5,7 @@
 # telephone. My wish has come true. I no longer know how to use my
 # telephone." - Bjarne Stroustrup
 
-import socket, random, md5, sys, urllib
+import socket, random, hashlib, sys, urllib
 
 from twisted.python import log, util
 from twisted.internet import protocol, defer, reactor, abstract
@@ -129,7 +129,7 @@ def DigestCalcHA1(
     pszNonce,
     pszCNonce,
 ):
-    m = md5.md5()
+    m = hashlib.md5()
     m.update(pszUserName)
     m.update(":")
     m.update(pszRealm)
@@ -137,7 +137,7 @@ def DigestCalcHA1(
     m.update(pszPassword)
     HA1 = m.digest()
     if pszAlg == "md5-sess":
-        m = md5.md5()
+        m = hashlib.md5()
         m.update(HA1)
         m.update(":")
         m.update(pszNonce)
@@ -156,7 +156,7 @@ def DigestCalcResponse(
     pszDigestUri,
     pszHEntity,
 ):
-    m = md5.md5()
+    m = hashlib.md5()
     m.update(pszMethod)
     m.update(":")
     m.update(pszDigestUri)
@@ -165,7 +165,7 @@ def DigestCalcResponse(
         m.update(pszHEntity)
     HA2 = m.digest().encode('hex')
 
-    m = md5.md5()
+    m = hashlib.md5()
     m.update(HA1)
     m.update(":")
     m.update(pszNonce)
@@ -994,7 +994,7 @@ def computeBranch(msg):
             oldvia = msg.headers['via'][0]
         else:
             oldvia = ''
-        return VIA_COOKIE + md5.new((parseAddress(msg.headers['to'][0])[2].get('tag','') +
+        return VIA_COOKIE + hashlib.new((parseAddress(msg.headers['to'][0])[2].get('tag','') +
                                     parseAddress(msg.headers['from'][0])[2].get('tag','')+
                                    msg.headers['call-id'][0] +
                                    msg.uri.toString() +
@@ -1626,7 +1626,7 @@ class SIPTransport(protocol.DatagramProtocol):
 
         r.addHeader("to", "%s:%s" % (addr))
         # see RFC3261 8.1.1.7, 16.6.8
-        r.addHeader("via", Via(host=self.host, port=self.port, branch=VIA_COOKIE+ md5.new(repr(addr)).hexdigest()).toString())
+        r.addHeader("via", Via(host=self.host, port=self.port, branch=VIA_COOKIE+ hashlib.new(repr(addr)).hexdigest()).toString())
         self.transport.write(r, addr)
 
     def _fixupNAT(self, message, (srcHost, srcPort)):
@@ -2439,7 +2439,7 @@ class RegistrationClient(SIPResolverMixin):
         return defer.succeed(True)
 
     def register(self, username, password, domain):
-        self.callid = "%s@%s" % (md5.md5(str(random.random())).hexdigest(),
+        self.callid = "%s@%s" % (hashlib.md5(str(random.random())).hexdigest(),
                                  domain)
         uri = URL(domain, username)
         r = self._makeRegisterMessage(self.callid, domain, uri)
@@ -2475,11 +2475,11 @@ class RegistrationClient(SIPResolverMixin):
 
     def _getHashingImplementation(self, algorithm):
         #from shtoom.sip
-        import md5, sha
+        import hashlib
         if algorithm.lower() == 'md5':
-            H = lambda x: md5.new(x).hexdigest()
+            H = lambda x: hashlib.md5(x).hexdigest()
         elif algorithm.lower() == 'sha':
-            H = lambda x: sha.new(x).hexdigest()
+            H = lambda x: hashlib.sha1(x).hexdigest()
         # XXX MD5-sess
         KD = lambda s, d, H=H: H("%s:%s" % (s, d))
         return H, KD

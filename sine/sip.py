@@ -994,7 +994,7 @@ def computeBranch(msg):
             oldvia = msg.headers['via'][0]
         else:
             oldvia = ''
-        return VIA_COOKIE + hashlib.new((parseAddress(msg.headers['to'][0])[2].get('tag','') +
+        return VIA_COOKIE + hashlib.md5((parseAddress(msg.headers['to'][0])[2].get('tag','') +
                                     parseAddress(msg.headers['from'][0])[2].get('tag','')+
                                    msg.headers['call-id'][0] +
                                    msg.uri.toString() +
@@ -1626,7 +1626,7 @@ class SIPTransport(protocol.DatagramProtocol):
 
         r.addHeader("to", "%s:%s" % (addr))
         # see RFC3261 8.1.1.7, 16.6.8
-        r.addHeader("via", Via(host=self.host, port=self.port, branch=VIA_COOKIE+ hashlib.new(repr(addr)).hexdigest()).toString())
+        r.addHeader("via", Via(host=self.host, port=self.port, branch=VIA_COOKIE+ hashlib.md5(repr(addr)).hexdigest()).toString())
         self.transport.write(r, addr)
 
     def _fixupNAT(self, message, (srcHost, srcPort)):
